@@ -18,7 +18,7 @@
 #define Oct4 10
 
 #define noteOffset 36
-#define offCounter 100
+#define offCounter 0
 
 #include <MIDI.h>
 #include <HID.h>
@@ -60,12 +60,18 @@ void send() {
 	for (int c = 48; c >= 0; c--) {
 		if (flip[c] == HIGH) {
 			flip[c] = LOW;
-			noteBuffer = c + noteOffset;
-			if (status[c] == HIGH) {
-				MIDI.sendNoteOn(noteBuffer, velocity, 1);
+			if (noteCounter[c] > 0) {
+				noteCounter[c]--;
 			}
-			else if (status[c] == LOW) {
-				MIDI.sendNoteOff(noteBuffer, velocity, 1);
+			else {
+				noteCounter[c] = offCounter;
+				noteBuffer = c + noteOffset;
+				if (status[c] == HIGH) {
+					MIDI.sendNoteOn(noteBuffer, velocity, 1);
+				}
+				else if (status[c] == LOW) {
+					MIDI.sendNoteOff(noteBuffer, velocity, 1);
+				}
 			}
 		}
 	}
@@ -73,6 +79,7 @@ void send() {
 
 void scan() {
 	for (int cOctave = 0; cOctave < 4; cOctave++) {
+		octBuffer = 12 * cOctave;
 		digitalWrite(octave[cOctave], HIGH);
 
 
