@@ -53,38 +53,40 @@ void setup()
 
 void loop() {
 	scan();
+	send();
+}
+
+void send() {
+	for (int c = 48; c >= 0; c--) {
+		if (flip[c] == HIGH) {
+			flip[c] = LOW;
+			noteBuffer = c + noteOffset;
+			if (status[c] == HIGH) {
+				MIDI.sendNoteOn(noteBuffer, velocity, 1);
+			}
+			else if (status[c] == LOW) {
+				MIDI.sendNoteOff(noteBuffer, velocity, 1);
+			}
+		}
+	}
 }
 
 void scan() {
 	for (int cOctave = 0; cOctave < 4; cOctave++) {
-		octBuffer = 12 * cOctave;
+		/*octBuffer = 12 * cOctave;*/
 		digitalWrite(octave[cOctave], HIGH);
 
 
 		for (int cNote = 0; cNote < 12; cNote++) {
-			if (noteCounter[cNote + octBuffer] > 0) {
-				noteCounter[cNote + octBuffer]--;
-			}
-			else {
-				noteCounter[cNote + octBuffer] = offCounter;
-
 				buffer = digitalRead(note[cNote]);
 
 				if (buffer ^ status[cNote + octBuffer]) {
 					status[cNote + octBuffer] = buffer;
 					flip[cNote + octBuffer] = HIGH;
-					noteBuffer = cNote + octBuffer + noteOffset;
-					if (buffer == HIGH) {
-						MIDI.sendNoteOn(noteBuffer, velocity, 1);
-					}
-					if (buffer == LOW) {
-						MIDI.sendNoteOff(noteBuffer, velocity, 1);
-					}
 				}
 				else {
 					flip[cNote + octBuffer] = LOW;
 				}
-			}
 
 		}
 		digitalWrite(octave[cOctave], LOW);
