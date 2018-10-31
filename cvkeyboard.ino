@@ -73,7 +73,6 @@ void send() {
 
 void scan() {
 	for (int cOctave = 0; cOctave < 4; cOctave++) {
-		/*octBuffer = 12 * cOctave;*/
 		digitalWrite(octave[cOctave], HIGH);
 
 
