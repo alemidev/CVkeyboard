@@ -19,23 +19,34 @@
 
 #define noteOffset 36
 #define offCounter 0
+#define MINUTE 60000
 
 #include <MIDI.h>
 #include <HID.h>
 MIDI_CREATE_DEFAULT_INSTANCE();
 
 int note[12] = {
-  C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B };  // Pin delle note : 0 -> C , 11 -> B
+  C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B };  // Note Pins above
 int octave[4] = {
-  Oct1, Oct2, Oct3, Oct4 };         // Pin delle ottave : 0 -> 2 , 3 -> 5
+  Oct1, Oct2, Oct3, Oct4 };         // Octave Pins above
+
 int noteCounter[49] = { 0 };
-boolean status[49] = { LOW };         // Array di stato, aggiornato durante ogni ciclo. 0 -> C2 , 11 -> C3 , 23 -> C4 -> , 35 -> C5 , 48 -> C6
+boolean status[49] = { LOW };         
 boolean flip[49] = { LOW };
-boolean buffer = LOW;             // Usato come buffer per lo stato di ogni pin, per non chiamare una lettura ogni volta.
-int octBuffer;                 // Usato per non ripetere l'aritmetica ad ogni accesso all'array di stato.
+boolean buffer = LOW;
+
+int octBuffer;
 byte noteBuffer;
-byte velocity = 100;               // Placeholder.
-int channel = 7;                  // Placeholder.
+
+
+byte velocity = 100;               // Placeholder. Will need something to change it
+int channel = 7;                  // Placeholder. Will need something to change it
+int bpm = 120;					// Placeholder. Will need something to change it
+int gate = 25;					// Placeholder. Will need something to change it
+
+int nextBeat = 0;
+int step = 0;
+
 
 
 void setup()
@@ -48,12 +59,14 @@ void setup()
 	}
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200);
+	nextBeat = millis() + (MINUTE / bpm);
 }
 
 
 void loop() {
+	if (millis() < nextBeat) return;
 	scan();
-	send();
+	arp();
 }
 
 void send() {
@@ -67,14 +80,38 @@ void send() {
 				noteCounter[c] = offCounter;
 				noteBuffer = c + noteOffset;
 				if (status[c] == HIGH) {
-					MIDI.sendNoteOn(noteBuffer, velocity, 1);
+					MIDI.sendNoteOn(noteBuffer, velocity, channel);
 				}
 				else if (status[c] == LOW) {
-					MIDI.sendNoteOff(noteBuffer, velocity, 1);
+					MIDI.sendNoteOff(noteBuffer, velocity, channel);
 				}
 			}
 		}
 	}
+}
+
+void playNote(int c, boolean status) {
+	if (status == HIGH) {
+		MIDI.sendNoteOn(c + noteOffset, velocity, channel);
+	}
+	else if (status == LOW) {
+		MIDI.sendNoteOff(c + noteOffset, velocity, channel);
+	}
+}
+
+void arp() {
+	while (step < 49 && status[step] == LOW) {
+		step++;
+	}
+	if (step == 49) {
+		step = 0;
+	}
+	else {
+		playNote(step, HIGH);
+		if (gate < millis() - nextBeat) delay(gate - 5);		// 5 ms arbitrarily for the check. Need something more sofisticate
+		playNote(step, LOW);
+	}
+	return;
 }
 
 void scan() {
@@ -84,17 +121,27 @@ void scan() {
 
 
 		for (int cNote = 0; cNote < 12; cNote++) {
-				buffer = digitalRead(note[cNote]);
+			buffer = digitalRead(note[cNote]);
 
-				if (buffer ^ status[cNote + octBuffer]) {
-					status[cNote + octBuffer] = buffer;
-					flip[cNote + octBuffer] = HIGH;
-				}
-				else {
-					flip[cNote + octBuffer] = LOW;
-				}
+			if (buffer ^ status[cNote + octBuffer]) {
+				status[cNote + octBuffer] = buffer;
+				flip[cNote + octBuffer] = HIGH;
+			}
+			else {
+				flip[cNote + octBuffer] = LOW;
+			}
 
 		}
 		digitalWrite(octave[cOctave], LOW);
+	}
+
+}
+
+int nPressed() {
+	int c, n = 0;
+	for (c = 0; c < 49; c++) {
+		if (status[c] == HIGH) {
+			n++;
+		}
 	}
 }
