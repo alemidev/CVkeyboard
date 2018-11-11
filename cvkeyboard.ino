@@ -42,10 +42,12 @@ byte noteBuffer;
 byte velocity = 100;               // Placeholder. Will need something to change it
 int channel = 7;                  // Placeholder. Will need something to change it
 int bpm = 120;					// Placeholder. Will need something to change it
-int gate = 25;					// Placeholder. Will need something to change it
+int gate = 300;					// Placeholder. Will need something to change it
 
-int nextBeat = 0;
+unsigned long nextBeat = 0;
 int step = 0;
+int lastStep = 0;
+boolean notePlayed = LOW;
 
 
 
@@ -65,8 +67,33 @@ void setup()
 
 void loop() {
 	if (millis() < nextBeat) return;
+	notePlayed = LOW;
+	while (notePlayed == LOW) {
+		cleanScan();
+		arp();
+	}
+	nextBeat += (MINUTE / bpm);
+}
+
+void cleanScan() {
+	int c;
+	for (c = 0; c < 49; c++) noteCounter[c] = 0;
 	scan();
-	arp();
+	for (c = 0; c < 49; c++) {
+		if (status[c] == HIGH) noteCounter[c]++;
+	}
+	scan();
+	for (c = 0; c < 49; c++) {
+		if (status[c] == HIGH) noteCounter[c]++;
+	}
+	scan();
+	for (c = 0; c < 49; c++) {
+		if (status[c] == HIGH) noteCounter[c]++;
+	}
+	for (c = 0; c < 49; c++) {
+		if (noteCounter[c] == 3) status[c] = HIGH;
+		else status[c] = LOW;
+	}
 }
 
 void send() {
@@ -100,6 +127,7 @@ void playNote(int c, boolean status) {
 }
 
 void arp() {
+	step++;
 	while (step < 49 && status[step] == LOW) {
 		step++;
 	}
@@ -107,9 +135,10 @@ void arp() {
 		step = 0;
 	}
 	else {
+		playNote(lastStep, LOW);
 		playNote(step, HIGH);
-		if (gate < millis() - nextBeat) delay(gate - 5);		// 5 ms arbitrarily for the check. Need something more sofisticate
-		playNote(step, LOW);
+		lastStep = step;
+		notePlayed = HIGH;
 	}
 	return;
 }
