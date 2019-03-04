@@ -18,159 +18,128 @@
 #define Oct4 10
 
 #define noteOffset 36
-#define offCounter 0
-#define MINUTE 60000
 
-#include <MIDI.h>
-#include <HID.h>
-MIDI_CREATE_DEFAULT_INSTANCE();
+//#include <MIDI.h>
+//#include <HID.h>
+//MIDI_CREATE_DEFAULT_INSTANCE();
+
+typedef struct OctaveStatus {
+	bool stat[12];
+	int nOct;
+} octst;
 
 int note[12] = {
   C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B };  // Note Pins above
 int octave[4] = {
   Oct1, Oct2, Oct3, Oct4 };         // Octave Pins above
+int ledPins[12]{
+  19, 18, 17, 16, 15, 14, 2, 3, 4, 5, 6, 0 };
 
-int noteCounter[49] = { 0 };
-boolean status[49] = { LOW };         
-boolean flip[49] = { LOW };
-boolean buffer = LOW;
+int clock = 0;
+octst buff;
 
-int octBuffer;
-byte noteBuffer;
-
-
-byte velocity = 100;               // Placeholder. Will need something to change it
-int channel = 7;                  // Placeholder. Will need something to change it
-int bpm = 120;					// Placeholder. Will need something to change it
-int gate = 300;					// Placeholder. Will need something to change it
-
-unsigned long nextBeat = 0;
-int step = 0;
-int lastStep = 0;
-boolean notePlayed = LOW;
-
-
-
-void setup()
-{
+void setup() {
 	for (int cOctave = 0; cOctave < 4; cOctave++) {
 		pinMode(octave[cOctave], OUTPUT);
 	}
 	for (int cNote = 0; cNote < 12; cNote++) {
 		pinMode(note[cNote], INPUT);
 	}
-	MIDI.begin(MIDI_CHANNEL_OFF);
+	for (int cLed = 0; cLed < 12; cLed++) {
+		pinMode(ledPins[cLed], OUTPUT);
+	}
+	//  MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200);
-	nextBeat = millis() + (MINUTE / bpm);
+	//  nextBeat = millis() + (MINUTE / bpm);
+	for (int cLed = 0; cLed < 12; cLed++) {
+		digitalWrite(ledPins[cLed], HIGH);
+		delay(100);
+	}
+	for (int cLed = 0; cLed < 12; cLed++) {
+		digitalWrite(ledPins[cLed], LOW);
+		delay(100);
+	}
+	pinMode(50, OUTPUT);
 }
-
 
 void loop() {
-	if (millis() < nextBeat) return;
-	notePlayed = LOW;
-	while (notePlayed == LOW) {
-		cleanScan();
-		arp();
+	for (clock = 0; clock < 4; clock++) {
+		digitalWrite(octave[clock], HIGH);
+		buff = scan(clock);
+		digitalWrite(octave[clock], LOW);
+		//clean = clearOct(buff[0], buff[1], buff[2], buff[3], buff[4]);
+		debug(buff);
+		serialDebug(buff);
 	}
-	nextBeat += (MINUTE / bpm);
 }
 
-void cleanScan() {
+bool debouncedRead(int pin) {
+	if (digitalRead(pin) == HIGH) {
+		if (digitalRead(pin) == HIGH) {
+			if (digitalRead(pin) == HIGH) {
+				if (digitalRead(pin) == HIGH) {
+					if (digitalRead(pin) == HIGH) {
+						return HIGH;
+					}
+				}
+			}
+		}
+	}
+	return LOW;
+}
+octst scan(int nOct) {
 	int c;
-	for (c = 0; c < 49; c++) noteCounter[c] = 0;
-	scan();
-	for (c = 0; c < 49; c++) {
-		if (status[c] == HIGH) noteCounter[c]++;
+	octst output;
+
+	output.nOct = nOct;
+
+	for (c = 0; c < 12; c++) {
+		output.stat[c] = digitalRead(note[c]);
+		//   delay(50);
 	}
-	scan();
-	for (c = 0; c < 49; c++) {
-		if (status[c] == HIGH) noteCounter[c]++;
+	return output;
+}
+
+/*octst clearOct(octst o1, octst o2, octst o3, octst o4, octst o5) {
+  octst output;
+
+  output.nOct = o1.nOct;
+  for (int c = 0; c < 12; +c++) {
+	if (o1.stat[c] && o2.stat[c] && o3.stat[c] && o4.stat[c] && o5.stat[c]) output.stat[c] = HIGH;
+	else output.stat[c] = LOW;
+  }
+  return output;
+}*/
+
+void debug(octst input) {
+	int c;
+	for (c = 0; c < 12; c++) {
+		digitalWrite(ledPins[c], input.stat[c]);
 	}
-	scan();
-	for (c = 0; c < 49; c++) {
-		if (status[c] == HIGH) noteCounter[c]++;
-	}
-	for (c = 0; c < 49; c++) {
-		if (noteCounter[c] == 3) status[c] = HIGH;
-		else status[c] = LOW;
+	delay(5);
+	for (c = 0; c < 12; c++) {
+		digitalWrite(ledPins[c], LOW);
 	}
 }
 
-void send() {
-	for (int c = 48; c >= 0; c--) {
-		if (flip[c] == HIGH) {
-			flip[c] = LOW;
-			if (noteCounter[c] > 0) {
-				noteCounter[c]--;
-			}
-			else {
-				noteCounter[c] = offCounter;
-				noteBuffer = c + noteOffset;
-				if (status[c] == HIGH) {
-					MIDI.sendNoteOn(noteBuffer, velocity, channel);
-				}
-				else if (status[c] == LOW) {
-					MIDI.sendNoteOff(noteBuffer, velocity, channel);
-				}
-			}
-		}
+void serialDebug(octst input) {
+	for (int c = 0; c < 12; c++) {
+		Serial.print(input.stat[c]);
 	}
+	Serial.println("");
 }
 
-void playNote(int c, boolean status) {
-	if (status == HIGH) {
-		MIDI.sendNoteOn(c + noteOffset, velocity, channel);
-	}
-	else if (status == LOW) {
-		MIDI.sendNoteOff(c + noteOffset, velocity, channel);
-	}
-}
-
-void arp() {
-	step++;
-	while (step < 49 && status[step] == LOW) {
-		step++;
-	}
-	if (step == 49) {
-		step = 0;
-	}
-	else {
-		playNote(lastStep, LOW);
-		playNote(step, HIGH);
-		lastStep = step;
-		notePlayed = HIGH;
-	}
-	return;
-}
-
-void scan() {
-	for (int cOctave = 0; cOctave < 4; cOctave++) {
-		octBuffer = 12 * cOctave;
-		digitalWrite(octave[cOctave], HIGH);
-
-
-		for (int cNote = 0; cNote < 12; cNote++) {
-			buffer = digitalRead(note[cNote]);
-
-			if (buffer ^ status[cNote + octBuffer]) {
-				status[cNote + octBuffer] = buffer;
-				flip[cNote + octBuffer] = HIGH;
-			}
-			else {
-				flip[cNote + octBuffer] = LOW;
-			}
-
-		}
-		digitalWrite(octave[cOctave], LOW);
-	}
-
-}
-
-int nPressed() {
-	int c, n = 0;
-	for (c = 0; c < 49; c++) {
-		if (status[c] == HIGH) {
-			n++;
-		}
-	}
-}
+/* debugLed(int c) {
+  switch (c) {
+  case 0: digitalWrite(2, HIGH);
+  break;
+  case 1: digitalWrite(3, HIGH);
+  break;
+  case 2: digitalWrite(4, HIGH);
+  break;
+  case 3: digitalWrite(2, LOW);
+  digitalWrite(3, LOW);
+  digitalWrite(4, LOW);
+  break;
+  }
+}*/
