@@ -67,26 +67,12 @@ void loop() {
 		digitalWrite(octave[clock], HIGH);
 		buff = scan(clock);
 		digitalWrite(octave[clock], LOW);
-		//clean = clearOct(buff[0], buff[1], buff[2], buff[3], buff[4]);
 		debug(buff);
 		serialDebug(buff);
 	}
 }
 
-bool debouncedRead(int pin) {
-	if (digitalRead(pin) == HIGH) {
-		if (digitalRead(pin) == HIGH) {
-			if (digitalRead(pin) == HIGH) {
-				if (digitalRead(pin) == HIGH) {
-					if (digitalRead(pin) == HIGH) {
-						return HIGH;
-					}
-				}
-			}
-		}
-	}
-	return LOW;
-}
+
 octst scan(int nOct) {
 	int c;
 	octst output;
@@ -95,21 +81,9 @@ octst scan(int nOct) {
 
 	for (c = 0; c < 12; c++) {
 		output.stat[c] = digitalRead(note[c]);
-		//   delay(50);
 	}
 	return output;
 }
-
-/*octst clearOct(octst o1, octst o2, octst o3, octst o4, octst o5) {
-  octst output;
-
-  output.nOct = o1.nOct;
-  for (int c = 0; c < 12; +c++) {
-	if (o1.stat[c] && o2.stat[c] && o3.stat[c] && o4.stat[c] && o5.stat[c]) output.stat[c] = HIGH;
-	else output.stat[c] = LOW;
-  }
-  return output;
-}*/
 
 void debug(octst input) {
 	int c;
@@ -129,17 +103,28 @@ void serialDebug(octst input) {
 	Serial.println("");
 }
 
-/* debugLed(int c) {
-  switch (c) {
-  case 0: digitalWrite(2, HIGH);
-  break;
-  case 1: digitalWrite(3, HIGH);
-  break;
-  case 2: digitalWrite(4, HIGH);
-  break;
-  case 3: digitalWrite(2, LOW);
-  digitalWrite(3, LOW);
-  digitalWrite(4, LOW);
-  break;
+bool debouncedRead(int pin) {
+	if (digitalRead(pin) == HIGH) {
+		if (digitalRead(pin) == HIGH) {
+			if (digitalRead(pin) == HIGH) {
+				if (digitalRead(pin) == HIGH) {
+					if (digitalRead(pin) == HIGH) {
+						return HIGH;
+					}
+				}
+			}
+		}
+	}
+	return LOW;
+}
+
+/*octst clearOct(octst o1, octst o2, octst o3, octst o4, octst o5) {
+  octst output;
+
+  output.nOct = o1.nOct;
+  for (int c = 0; c < 12; +c++) {
+	if (o1.stat[c] && o2.stat[c] && o3.stat[c] && o4.stat[c] && o5.stat[c]) output.stat[c] = HIGH;
+	else output.stat[c] = LOW;
   }
+  return output;
 }*/
