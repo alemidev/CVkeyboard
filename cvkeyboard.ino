@@ -29,13 +29,13 @@ typedef struct OctaveStatus {
 } octst;
 
 int note[12] = {
-  C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B };  // Note Pins above
+  C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B };	// Note Pins above
 int octave[4] = {
-  Oct1, Oct2, Oct3, Oct4 };         // Octave Pins above
+  Oct1, Oct2, Oct3, Oct4 };						// Octave Pins above
 int ledPins[12]{
   19, 18, 17, 16, 15, 14, 2, 3, 4, 5, 6, 0 };
 
-int clock = 0;
+int clock = 0;									// Keeps track of current octave
 octst buff;
 
 void setup() {
@@ -73,8 +73,8 @@ void loop() {
 }
 
 
-octst scan(int nOct) {
-	int c;
+octst scan(int nOct) {					// This function reads the 12 note pins and returns a struct
+	int c;								//			with 1 bool for each note
 	octst output;
 
 	output.nOct = nOct;
@@ -85,7 +85,7 @@ octst scan(int nOct) {
 	return output;
 }
 
-void debug(octst input) {
+void debug(octst input) {				// Lights up 12 LEDs used to control the readings
 	int c;
 	for (c = 0; c < 12; c++) {
 		digitalWrite(ledPins[c], input.stat[c]);
@@ -96,14 +96,14 @@ void debug(octst input) {
 	}
 }
 
-void serialDebug(octst input) {
+void serialDebug(octst input) {			// Prints on the Serial Monitor the 12 bits just read
 	for (int c = 0; c < 12; c++) {
 		Serial.print(input.stat[c]);
 	}
 	Serial.println("");
 }
 
-bool debouncedRead(int pin) {
+bool debouncedRead(int pin) {			// Should clear readings from false positives but doesn't work
 	if (digitalRead(pin) == HIGH) {
 		if (digitalRead(pin) == HIGH) {
 			if (digitalRead(pin) == HIGH) {
