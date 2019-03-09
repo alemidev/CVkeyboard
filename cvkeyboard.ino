@@ -9,37 +9,40 @@
 
 MIDI_CREATE_DEFAULT_INSTANCE();
 
-typedef struct OctaveStatus {			// This struct is for an octave status. Each bool is for 1 note
+typedef struct OctaveStatus {      // This struct is for an octave status. Each bool is for 1 note
 	bool stat[12];
 	int nOct;
 } octst;
 
 
-			// PIN DECLARATIONS
-int note[12] = {						// Pins used to read each note (C is 0, B is 11)
+// PIN DECLARATIONS
+int note[12] = {            // Pins used to read each note (C is 0, B is 11)
   22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44 };
-int octave[4] = {						// Pins associated to each octave's contact bar
+int octave[4] = {           // Pins associated to each octave's contact bar
   12, 9, 8, 10 };
-int sendPin[3] = {						// Pins used as sender for capacitive touch buttons
-	5, 4, 16 };
-int receivePin[3] = {					// Pins used as receiver for capacitive touch buttons
-	6, 3, 17 };
+int sendPin[3] = {            // Pins used as sender for capacitive touch buttons
+  5, 4, 16 };
+int receivePin[3] = {         // Pins used as receiver for capacitive touch buttons
+  6, 3, 17 };
 
-			// GLOBAL SETTINGS
-bool raw;								// Signal is sent when key is detected
+// GLOBAL SETTINGS
+bool raw;               // Signal is sent when key is detected
 
-			// PLACEHOLDERS
-byte velocity = 100;					// 
-byte channel = 1;						// 
-int bpm = 360;							// 
-unsigned long gate = 50;				// ms of keypress if arpeggiator
-unsigned long nextBeat = 0;				// Used to keep track of beats. Useless if receiving MIDI clock.
+	  // PLACEHOLDERS
+byte velocity = 100;          // 
+byte channel = 1;           // 
+int bpm = 360;              // 
+unsigned long gate = 50;        // ms of keypress if arpeggiator
+unsigned long nextBeat = 0;       // Used to keep track of beats. Useless if receiving MIDI clock.
 
-			// SYSTEM VARIABLES
-int clock = 0;							// Used if arp to cycle through notes
-int npressed;							// Number of keys pressed, used to avoid doing anything when no keys are pressed
-bool kboard[49];						// Last status of keyboard
-bool bCapStat[3];						// Last status of Capacitive Buttons
+	  // SYSTEM VARIABLES
+int arp = 0;              // Keeps track of last played note if arpeggiating
+int midiclock = 0;              // Used to sync with MIDI clock
+int semA = 0;              // Basic semaphore implementation with global counter
+int semB = 0;
+int npressed;             // Number of keys pressed, used to avoid doing anything when no keys are pressed
+bool kboard[49];            // Last status of keyboard
+bool bCapStat[3];           // Last status of Capacitive Buttons
 CapacitiveSensor* bCap[3];
 
 
@@ -50,26 +53,27 @@ void setup() {
 	for (int cNote = 0; cNote < 12; cNote++) {
 		pinMode(note[cNote], INPUT);
 	}
-	for (int cButton = 0; cButton < 3; cButton++) {									// Capacitive Buttons configuration
-		bCap[cButton] = new CapacitiveSensor(sendPin[cButton], receivePin[cButton]);	// Initialized
-		bCap[cButton]->set_CS_AutocaL_Millis(0xFFFFFFFF);							// No recalibration
-		bCap[cButton]->set_CS_Timeout_Millis(200);									// Timeout set to 200ms (instead of 2s)
-		bCapStat[cButton] = LOW;													// Button starts LOW
+	for (int cButton = 0; cButton < 3; cButton++) {                 // Capacitive Buttons configuration
+		bCap[cButton] = new CapacitiveSensor(sendPin[cButton], receivePin[cButton]);  // Initialized
+		bCap[cButton]->set_CS_AutocaL_Millis(0xFFFFFFFF);             // No recalibration
+		bCap[cButton]->set_CS_Timeout_Millis(200);                  // Timeout set to 200ms (instead of 2s)
+		bCapStat[cButton] = LOW;                          // Button starts LOW
 	}
 
-	for (int cStat = 0; cStat < 49; cStat++) kboard[cStat] = LOW;					// All keyboard keys start LOW
+	for (int cStat = 0; cStat < 49; cStat++) kboard[cStat] = LOW;         // All keyboard keys start LOW
 
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200);
 
-	pinMode(2, INPUT_PULLUP);														// Used for RAW switch
+	pinMode(2, INPUT_PULLUP);                           // Used for RAW switch
 }
 
 void loop() {
+	sync();
+
 	for (int cButton = 0; cButton < 3; cButton++) {
 		bCapStat[cButton] = evalButton(bCap[cButton], bCapStat[cButton], DRUMNOTE + cButton);
 	}
-
 	npressed = 0;
 	raw = digitalRead(2);
 	for (int cOctave = 0; cOctave < 4; cOctave++) {
@@ -79,15 +83,19 @@ void loop() {
 	}
 	if (raw) return;
 	if (npressed < 1) return;
-	if (Serial.read() == MIDICLOCK) {
-		clock++;
-		while (kboard[clock] == LOW) {
-			clock++;
-			if (clock == 49) clock = 0;
+
+	if (semA > 0) {
+		semA--;
+		arp++;
+		while (kboard[arp] == LOW) {
+			arp++;
+			if (arp == 49) arp = 0;
 		}
-		playNote(clock, HIGH);
-		delay(gate);
-		playNote(clock, LOW);
+		playNote(arp, HIGH);
+	}
+	if (semB > 0) {
+		semB--;
+		playNote(arp, LOW);
 	}
 }
 
@@ -144,5 +152,14 @@ bool evalButton(CapacitiveSensor* b, bool value, byte note) {
 			MIDI.sendNoteOff(note, velocity, (byte)7);
 			return LOW;
 		}
+	}
+}
+
+void sync() {
+	if (Serial.available() && Serial.read() == MIDICLOCK) {
+		midiclock++;
+		if (midiclock == 11 && semA == 0) semA++;
+		else if (midiclock == 5 && semB == 0) semB++;
+		else if (midiclock == 12) midiclock = 0;
 	}
 }
