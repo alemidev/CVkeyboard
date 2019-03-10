@@ -9,11 +9,17 @@
 
 MIDI_CREATE_DEFAULT_INSTANCE();
 
+typedef struct SequencerStep* link;
+
 typedef struct OctaveStatus {      // This struct is for an octave status. Each bool is for 1 note
 	bool stat[12];
 	int nOct;
 } octst;
 
+typedef struct SequencerStep {
+	int note;
+	link next;
+} step;
 
 // PIN DECLARATIONS
 int note[12] = {            // Pins used to read each note (C is 0, B is 11)
@@ -25,17 +31,20 @@ int sendPin[3] = {            // Pins used as sender for capacitive touch button
 int receivePin[3] = {         // Pins used as receiver for capacitive touch buttons
   6, 3, 17 };
 
-// GLOBAL SETTINGS
+		// GLOBAL SETTINGS
 bool raw;               // Signal is sent when key is detected
 
-	  // PLACEHOLDERS
+		// PLACEHOLDERS
 byte velocity = 100;          // 
 byte channel = 1;           // 
 int bpm = 360;              // 
 unsigned long gate = 50;        // ms of keypress if arpeggiator
-unsigned long nextBeat = 0;       // Used to keep track of beats. Useless if receiving MIDI clock.
 
-	  // SYSTEM VARIABLES
+		// SEQUENCER POINTERS
+link head, tail, current;
+
+		// SYSTEM VARIABLES
+int nstep = 0;				// Keeps track of the sequencer steps
 int arp = 0;              // Keeps track of last played note if arpeggiating
 int midiclock = 0;              // Used to sync with MIDI clock
 int semA = 0;              // Basic semaphore implementation with global counter
@@ -82,20 +91,26 @@ void loop() {
 		digitalWrite(octave[cOctave], LOW);
 	}
 	if (raw) return;
-	if (npressed < 1) return;
 
 	if (semA > 0) {
 		semA--;
-		arp++;
-		while (kboard[arp] == LOW) {
-			arp++;
-			if (arp == 49) arp = 0;
+
+		if (bCapStat[1]) {
+			checkInsert();
 		}
-		playNote(arp, HIGH);
+		else if (bCapStat[2] && npressed > 0) {
+			checkReplace();
+		}
+		
+		if (current != NULL && current->note != -1) playNote(current->note, HIGH);
 	}
 	if (semB > 0) {
 		semB--;
-		playNote(arp, LOW);
+		if (bCapStat[0] && bCapStat[2]) {
+			deleteStep();
+		}
+		if (current != NULL && current->note != -1) playNote(current->note, LOW);
+		nextStep();
 	}
 }
 
@@ -162,4 +177,70 @@ void sync() {
 		else if (midiclock == 5 && semB == 0) semB++;
 		else if (midiclock == 12) midiclock = 0;
 	}
+}
+
+link newStep() {
+	return (link)malloc(sizeof(struct SequencerStep));
+}
+
+bool insertStep(int note) {
+	link newS = newStep();
+	if (newS == NULL) {
+		free(newS);
+		return LOW;
+	}
+
+	newS->note = note;
+	if (nstep == 0) {
+		newS->next = newS;
+		current = newS;
+		head = newS;
+	}
+	else {
+		newS->next = current->next;
+		current->next = newS;
+	}
+	nstep++;
+	return HIGH;
+}
+
+void nextStep() {
+	current = current->next;
+}
+
+bool deleteStep() {
+	if (nstep < 1) return LOW;
+
+	if (nstep == 1) {
+		free(current);
+		head = NULL;
+		current = NULL;
+	}
+	else {
+		link buffer = current->next->next;
+		free(current->next);
+		current->next = buffer;
+	}
+	nstep--;
+	return HIGH;
+}
+
+void checkInsert() {
+	if (npressed < 1) insertStep(-1);
+	else {
+		arp++;
+		while (!kboard[arp]) {
+			arp++;
+			if (arp == 49) arp = 0;
+		}
+		insertStep(arp);
+	}
+}
+void checkReplace() {
+	arp++;
+	while (!kboard[arp]) {
+		arp++;
+		if (arp == 49) arp = 0;
+	}
+	current->note = arp;
 }
