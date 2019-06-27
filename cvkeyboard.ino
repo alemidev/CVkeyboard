@@ -1,3 +1,7 @@
+#include <CapacitiveSensor.h>
+#include <MIDI.h>
+#include <HID.h>
+
 #define NOTEOffset 36
 #define drumOffset 60
 #define MINUTE 60000
@@ -5,12 +9,8 @@
 #define MAXKEYS 48
 #define MAXDPAD 3
 
-#include <CapacitiveSensor.h>
-#include <MIDI.h>
-#include <HID.h>
-
 MIDI_CREATE_DEFAULT_INSTANCE();
-
+                                                      
 typedef struct SequencerStep* link;
 
 typedef struct OCTAVEStatus {      // This struct is for an OCTAVE status. Each bool is for 1 NOTE
@@ -19,9 +19,8 @@ typedef struct OCTAVEStatus {      // This struct is for an OCTAVE status. Each 
 } octst;
 
 typedef struct SequencerStep {
-	int NOTE;
-	bool kboard_s[MAXKEYS]
-	bool dpad_s[MAXDPAD]
+	bool kboard_s[MAXKEYS];
+	bool dpad_s[MAXDPAD];
 	link next;
 } step;
 
@@ -84,7 +83,8 @@ void setup() {
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200);
 
-	pinMode(2, INPUT_PULLUP);                           // Used for overwrite switch
+	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
+	pinMode(ADD, INPUT_PULLUP);                           // Used for overwrite switch
 }
 
 void loop() {
@@ -93,28 +93,28 @@ void loop() {
 		sem_beat--;
 		if (sem_gate > 0) {		// If step was shorter than gate, close all open notes before next step
 			sem_gate--;
-			for (i=0; i<MAXKEYS; i++) if (current->kboard_s[c]) playNOTE(i, !current->kboard_s[c]);
-			for (i=0; i<MAXDPAD; i++) if (current->dpad_s[c]) playDrum(i, !current->dpad_s[c]);
+			for (int i = 0; i < MAXKEYS; i++) if (current->kboard_s[i]) playNOTE(i, !current->kboard_s[i]);
+			for (int i = 0; i < MAXDPAD; i++) if (current->dpad_s[i]) playDrum(i, !current->dpad_s[i]);
 		}
 		if (digitalRead(ADD) && digitalRead(OW)) insertStep();
 		if (digitalRead(ADD) && !digitalRead(OW)) deleteStep(); // Placeholder because I miss a button
 		nextStep();
 		if (current != NULL) { // Play all step notes and begin counting for gate
-			for (i=0; i<MAXKEYS; i++) if (current->kboard_s[c]) playNOTE(i, current->kboard_s[c]);
-			for (i=0; i<MAXDPAD; i++) if (current->dpad_s[c]) playDrum(i, current->dpad_s[c]);
+			for (int i = 0; i < MAXKEYS; i++) if (current->kboard_s[i]) playNOTE(i, current->kboard_s[i]);
+			for (int i = 0; i < MAXDPAD; i++) if (current->dpad_s[i]) playDrum(i, current->dpad_s[i]);
 			last_gate = millis();
 			sem_gate++;
 		}
 	}
 	if (sem_gate > 0 && (millis() - last_gate) > gate_length) {
 		sem_gate--;
-		for (i=0; i<MAXKEYS; i++) if (current->kboard_s[c]) playNOTE(i, !current->kboard_s[c]);
-		for (i=0; i<MAXDPAD; i++) if (current->dpad_s[c]) playDrum(i, !current->dpad_s[c]);
+		for (int i = 0; i < MAXKEYS; i++) if (current->kboard_s[i]) playNOTE(i, !current->kboard_s[i]);
+		for (int i = 0; i < MAXDPAD; i++) if (current->dpad_s[i]) playDrum(i, !current->dpad_s[i]);
 	}
 	dpadhit = LOW;
 	for (int cButton = 0; cButton < MAXDPAD; cButton++) {
 		dpad[cButton] = evalButton(bCap[cButton], dpad[cButton], cButton);
-		dpadhit = (dpad[cButton] || dpadhit)
+		dpadhit = (dpad[cButton] || dpadhit);
 	}
 
 	npressed = 0;
@@ -125,8 +125,8 @@ void loop() {
 	}
 
 	if (digitalRead(OW)) {
-		if (npressed > 0) current->kboard_s = kboard
-		if (dpadhit) current->dpad_s = dpad
+		if (npressed > 0) for (int i = 0; i < MAXKEYS; i++) current->kboard_s[i] = kboard[i];
+		if (dpadhit) for (int i = 0; i < MAXDPAD; i++) current->dpad_s[i] = dpad[i];
 	}
 }
 
@@ -182,20 +182,20 @@ int eval(octst input) {
 void playNOTE(int c, bool status) {
 	byte n = c + NOTEOffset;
 	if (status == HIGH) {
-		MIDI.sendNOTEOn(n, velocity, channel);
+		MIDI.sendNoteOn(n, velocity, channel);
 	}
 	else if (status == LOW) {
-		MIDI.sendNOTEOff(n, velocity, channel);
+		MIDI.sendNoteOff(n, velocity, channel);
 	}
 }
 
 void playDrum(int c, bool status) {
 	byte n = c + drumOffset;
 	if (status == HIGH) {
-		MIDI.sendNOTEOn(n, velocity, (byte)7);
+		MIDI.sendNoteOn(n, velocity, (byte)7);
 	}
 	else if (status == LOW) {
-		MIDI.sendNOTEOff(n, velocity, (byte)7);
+		MIDI.sendNoteOff(n, velocity, (byte)7);
 	}
 }
 
@@ -222,8 +222,8 @@ bool insertStep() {
 		return LOW;
 	}
 
-	newS->kboard_s = kboard;
-	newS->dpad_s = dpad
+	for (int i = 0; i < MAXKEYS; i++) newS->kboard_s[i] = kboard[i];
+	for (int i = 0; i < MAXDPAD; i++) newS->dpad_s[i] = dpad[i];
 
 	if (nstep == 0) {
 		newS->next = newS;
