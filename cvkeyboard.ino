@@ -33,6 +33,8 @@ int SEND[3] = {            // Pins used as sender for capacitive touch buttons
   5, 4, 16 };
 int RECEIVE[3] = {         // Pins used as receiver for capacitive touch buttons
   6, 3, 17 };
+int LEDS[4] = {         // Pins used for leds
+  21, 20, 19, 18 };
 int OW = 2;					// Pin used for overwrite switch
 int DEL = -1;				// Pin used for delete button
 int ADD = 14;				// Pin used for add button
@@ -65,12 +67,9 @@ CapacitiveSensor* bCap[MAXDPAD];
 
 
 void setup() {
-	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) {
-		pinMode(OCTAVE[cOCTAVE], OUTPUT);
-	}
-	for (int cNOTE = 0; cNOTE < 12; cNOTE++) {
-		pinMode(NOTE[cNOTE], INPUT);
-	}
+	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
+	for (int cNOTE = 0; cNOTE < 12; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
+	for (int cLED = 0; cLED < 4; cLED++) pinMode(LEDS[cLED], OUTPUT);
 	for (int cButton = 0; cButton < MAXDPAD; cButton++) {                 // Capacitive Buttons configuration
 		bCap[cButton] = new CapacitiveSensor(SEND[cButton], RECEIVE[cButton]);  // Initialized
 		bCap[cButton]->set_CS_AutocaL_Millis(0xFFFFFFFF);             // No recalibration
@@ -89,6 +88,10 @@ void setup() {
 
 void loop() {
 	sync();
+	if (current == head) nstep = 0;
+	else nstep++;
+	display(nstep);
+
 	if (sem_beat > 0) {
 		sem_beat--;
 		if (sem_gate > 0) {		// If step was shorter than gate, close all open notes before next step
@@ -96,8 +99,8 @@ void loop() {
 			for (int i = 0; i < MAXKEYS; i++) if (current->kboard_s[i]) playNOTE(i, !current->kboard_s[i]);
 			for (int i = 0; i < MAXDPAD; i++) if (current->dpad_s[i]) playDrum(i, !current->dpad_s[i]);
 		}
-		if (digitalRead(ADD) && digitalRead(OW)) insertStep();
-		if (digitalRead(ADD) && !digitalRead(OW)) deleteStep(); // Placeholder because I miss a button
+		if (digitalRead(ADD)) insertStep();
+		//if (digitalRead(ADD) && !digitalRead(OW)) deleteStep(); // Placeholder because I miss a button
 		nextStep();
 		if (current != NULL) { // Play all step notes and begin counting for gate
 			for (int i = 0; i < MAXKEYS; i++) if (current->kboard_s[i]) playNOTE(i, current->kboard_s[i]);
@@ -142,6 +145,13 @@ octst scan(int nOct) {          // This function reads the 12 NOTE pins and retu
 		output.stat[c] = digitalRead(NOTE[c]);
 	}
 	return output;
+}
+
+void display(int number){
+	for(int i = 0; i < 4; i++) {
+		digitalWrite(LEDS[i], number & 1);
+		number >> 1;
+	} 
 }
 
 bool evalButton(CapacitiveSensor* b, bool value, int note_number) {
@@ -203,9 +213,12 @@ void playDrum(int c, bool status) {
 
 void sync() {
 	if (Serial.available() && Serial.read() == MIDICLOCK) {
+		//sem_beat++;
 		midiclock++;
-		if (midiclock == 0 && sem_beat == 0) sem_beat++;
-		else if (midiclock == 24) midiclock = 0;
+		if (midiclock == 24){
+			midiclock = 0;
+			sem_beat++;
+		}
 	}
 }
 
