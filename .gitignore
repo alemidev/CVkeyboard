@@ -4,3 +4,10 @@
 
 /.vs
 /CppProperties.json
+.vscode/arduino.json
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+.vscode/ipch/f3a41dbca76912c5/mmap_address.bin
+.vscode/ipch/f3a41dbca76912c5/WIRING_DIGITAL.ipch
+.vscode/ipch/a05e84ed92aede25/mmap_address.bin
+.vscode/ipch/2a8fc4e60d41b99f/mmap_address.bin
