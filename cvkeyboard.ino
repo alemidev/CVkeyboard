@@ -36,9 +36,10 @@ int RECEIVE[3] = {         // Pins used as receiver for capacitive touch buttons
   6, 3, 17 };
 int OW = 2;					// Pin used for overwrite switch
 int DEL = -1;				// Pin used for delete button
+int ADD = 14;				// Pin used for add button
 
 		// GLOBAL SETTINGS
-bool overwrite;               // Step content is overwritten with pressed keys
+//bool overwrite;               // Step content is overwritten with pressed keys, could not be needed
 
 		// PLACEHOLDERS
 byte velocity = 100;          // 
@@ -95,6 +96,8 @@ void loop() {
 			for (i=0; i<MAXKEYS; i++) if (current->kboard_s[c]) playNOTE(i, !current->kboard_s[c]);
 			for (i=0; i<MAXDPAD; i++) if (current->dpad_s[c]) playDrum(i, !current->dpad_s[c]);
 		}
+		if (digitalRead(ADD) && digitalRead(OW)) insertStep();
+		if (digitalRead(ADD) && !digitalRead(OW)) deleteStep(); // Placeholder because I miss a button
 		nextStep();
 		if (current != NULL) { // Play all step notes and begin counting for gate
 			for (i=0; i<MAXKEYS; i++) if (current->kboard_s[c]) playNOTE(i, current->kboard_s[c]);
@@ -120,9 +123,8 @@ void loop() {
 		npressed += eval(scan(cOCTAVE));
 		digitalWrite(OCTAVE[cOCTAVE], LOW);
 	}
-	
-	overwrite = digitalRead(OW);
-	if (overwrite) {
+
+	if (digitalRead(OW)) {
 		if (npressed > 0) current->kboard_s = kboard
 		if (dpadhit) current->dpad_s = dpad
 	}
