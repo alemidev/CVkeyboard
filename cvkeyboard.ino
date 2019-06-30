@@ -97,13 +97,13 @@ void setup() {
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
 	pinMode(ADD, INPUT_PULLUP);                           // Used for overwrite switch
 
-	for (int i = 0, i < 6, i++){
+	for (int i = 0; i < 6; i++){
 		current[i] = NULL;
 		head[i] = NULL;
 		nstep[i] = 0;
 		mute[i] = LOW;
 	}
-	channel = 1;
+	channel = (byte) 1;
 
 	for (int i = 0; i < 16; i++) {						// Boot up fancyness!
 		display(i);
@@ -111,29 +111,26 @@ void setup() {
 	}
 
 	// ONLY FOR DEBUG
-	for (int i=0; i<16, i++){
-		for (byte chan=1; chan <= 6; chan++) insertStep(chan);
-	}
+	for (int chan=1; chan <= 6; chan++) for (int i=0; i<16; i++) insertStep((byte) chan - 1);
 
-
-	display(0);
+	display(10);
 }
 
 void loop() {
 	sync();
 	// add_step = (add_step || !digitalRead(ADD));
 	// del_step = (del_step || !digitalRead(DEL));
-	chan_up = (chan_up || !digitalRead(ADD))
+	chan_up = (chan_up || !digitalRead(ADD));
 
 	if (sem_beat > 0) {
 		sem_beat--;
 
 		if (sem_gate > 0) {		// If step was shorter than gate, close all open notes before next step
 			sem_gate--;
-			for (byte chan = 1; chan <= 6; chan++) {
+			for (int chan = 0; chan < 6; chan++) {
 				if (mute[chan]) continue;
-				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], chan);
-				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], chan);
+				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
 			}		
 		}
 
@@ -154,16 +151,16 @@ void loop() {
 		if (chan_up) {
 			chan_up = LOW;
 			channel++;
-			if (channel > 6) channel = (byte) 1;
+			if (channel > 3) channel = (byte) 1;
 		}
 		
 		nextStep();
 		display(current[channel-1]->stepnumber);
-		for (byte chan = 1; chan <= 6; chan++) {
+		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
 			if (current[chan] != NULL) { // Play all step notes and begin counting for gate
-				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, current[chan]->kboard_s[i]);
-				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, current[chan]->dpad_s[i]);
+				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
 			}
 		}
 		last_gate = millis();
@@ -172,10 +169,10 @@ void loop() {
 	
 	if (sem_gate > 0 && (millis() - last_gate) > gate_length) {
 		sem_gate--;
-		for (byte chan = 1; chan <= 6; chan++) {
+		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
-			for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], chan);
-			for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], chan);
+			for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+			for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
 		}		
 	}
 
@@ -269,10 +266,10 @@ void playNote(int c, bool status, byte chan) {
 void playDrum(int c, bool status, byte chan) {
 	byte n = c + drumOffset;
 	if (status == HIGH) {
-		MIDI.sendNoteOn(n, velocity, (byte)(chan + DRUMSHIFT));
+		MIDI.sendNoteOn(n, velocity, chan + (byte) DRUMSHIFT);
 	}
 	else if (status == LOW) {
-		MIDI.sendNoteOff(n, velocity, (byte)(chan + DRUMSHIFT));
+		MIDI.sendNoteOff(n, velocity, chan + (byte) DRUMSHIFT);
 	}
 }
 
@@ -300,15 +297,13 @@ link newStep() {
 bool insertStep(byte chan) {
 	link newS = newStep();
 	link buffer;
-	if (newS == NULL) {
-		free(newS);
-		return LOW;
-	}
+
+	if (newS == NULL) return LOW;
 
 	for (int i = 0; i < MAXKEYS; i++) newS->kboard_s[i] = LOW;
 	for (int i = 0; i < MAXDPAD; i++) newS->dpad_s[i] = LOW;
 
-	if (current[chan] == NULL) {
+	if (head[chan] == NULL) {
 		newS->next = newS;
 		newS->stepnumber = (unsigned short) 0;
 		current[chan] = newS;
@@ -316,7 +311,7 @@ bool insertStep(byte chan) {
 		nstep[chan] = 1;
 	}
 	else {
-		newS->stepnumber = nstep;
+		newS->stepnumber = nstep[chan];
 		buffer = current[chan];
 		while (buffer->next != head[chan]) buffer = buffer->next;
 		buffer->next = newS;
@@ -327,8 +322,8 @@ bool insertStep(byte chan) {
 }
 
 void nextStep() {
-	for (byte chan=1; chan <= 6; chan++) {
-		if (current[chan] == NULL) continue;
+	for (int chan=0; chan < 6; chan++) {
+		if (head[chan] == NULL) continue;
 		current[chan] = current[chan]->next;
 	}
 }
@@ -344,7 +339,7 @@ bool deleteStep(byte chan) {
 	}
 
 	if (nstep[chan] == 1) {
-		free(current);
+		free(current[chan]);
 		head[chan] = NULL;
 		current[chan] = NULL;
 	}
@@ -354,13 +349,13 @@ bool deleteStep(byte chan) {
 		buffer->next = current[chan]->next;
 		if (current[chan] == head[chan]) {
 			head[chan] = head[chan]->next;
-			int i = 0
-			buffer = head[chan]
+			int i = 0;
+			buffer = head[chan];
 			do {
 				buffer->stepnumber = i;
 				buffer = buffer->next;
 				i++;
-			} while (buffer != head[chan])
+			} while (buffer != head[chan]);
 		}
 		else {
 			buffer = buffer->next;
