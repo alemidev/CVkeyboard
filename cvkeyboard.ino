@@ -12,6 +12,7 @@
 #define MAXKEYS 48
 #define MAXDPAD 3
 #define MAXSTEP 16
+#define NBITS 6
 
 MIDI_CREATE_DEFAULT_INSTANCE();
                                                       
@@ -39,8 +40,8 @@ int SEND[3] = {            // Pins used as sender for capacitive touch buttons
   5, 4, 16 };
 int RECEIVE[3] = {         // Pins used as receiver for capacitive touch buttons
   6, 1, 17 };
-int LEDS[4] = {         // Pins used for leds
-  21, 20, 19, 18 };
+int LEDS[NBITS] = {         // Pins used for leds
+  15, 3, 21, 20, 19, 18 };
 int OW = 2;					// Pin used for overwrite switch
 int DEL = -1;				// Pin used for delete button
 int ADD = 14;				// Pin used for add button
@@ -70,7 +71,7 @@ bool chan_up = LOW;				// Only for now because I have few buttons :C
 int sem_beat = 0;              // Basic semaphore used to sync with MIDI beat
 int sem_gate = 0;				// Basic semaphore used for gate timing
 unsigned long last_gate = 0;			// Gate start time for last sequencer step
-unsigned long gate_length = 100;        // ms of keypress if arpeggiator
+unsigned long gate_length = 1000;        // ms of keypress if arpeggiator
 bool dpadhit = LOW;				// If any drum pad has been hit in this cycle, this is true
 int npressed;             // Number of keys pressed, used to avoid doing anything when no keys are pressed
 bool kboard[MAXKEYS];            // Last status of keyboard
@@ -81,7 +82,7 @@ CapacitiveSensor* bCap[MAXDPAD];
 void setup() {
 	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
 	for (int cNOTE = 0; cNOTE < 12; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
-	for (int cLED = 0; cLED < 4; cLED++) pinMode(LEDS[cLED], OUTPUT);
+	for (int cLED = 0; cLED < NBITS; cLED++) pinMode(LEDS[cLED], OUTPUT);
 	for (int cButton = 0; cButton < MAXDPAD; cButton++) {                 // Capacitive Buttons configuration
 		bCap[cButton] = new CapacitiveSensor(SEND[cButton], RECEIVE[cButton]);  // Initialized
 		bCap[cButton]->set_CS_AutocaL_Millis(0xFFFFFFFF);             // No recalibration
@@ -92,7 +93,7 @@ void setup() {
 	for (int cStat = 0; cStat < MAXKEYS; cStat++) kboard[cStat] = LOW;         // All keyboard keys start LOW
 
 	MIDI.begin(MIDI_CHANNEL_OFF);
-	Serial.begin(115200);
+	Serial.begin(115200); 								// Uncomment this if you use Hairless and set baud rate
 
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
 	pinMode(ADD, INPUT_PULLUP);                           // Used for overwrite switch
@@ -105,15 +106,17 @@ void setup() {
 	}
 	channel = (byte) 1;
 
-	for (int i = 0; i < 16; i++) {						// Boot up fancyness!
+	for (int i = 0; i < 64; i++) {						// Boot up fancyness! NBITS*NBITS
 		display(i);
-		delay(200);
+		delay(50);
 	}
 
 	// ONLY FOR DEBUG
-	for (int chan=1; chan <= 6; chan++) for (int i=0; i<16; i++) insertStep((byte) chan - 1);
+	for (int i=0; i<64; i++) insertStep((byte) 0);
+	for (int i=0; i<32; i++) insertStep((byte) 1);
+	for (int i=0; i<16; i++) insertStep((byte) 2);
 
-	display(10);
+	display(0);
 }
 
 void loop() {
@@ -125,12 +128,16 @@ void loop() {
 	if (sem_beat > 0) {
 		sem_beat--;
 
-		if (sem_gate > 0) {		// If step was shorter than gate, close all open notes before next step
+		if (sem_gate > 0) {		// If step was shorter than GATE, close all open notes before next step
 			sem_gate--;
 			for (int chan = 0; chan < 6; chan++) {
 				if (mute[chan]) continue;
-				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
-				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXKEYS; i++)
+					if (current[chan]->kboard_s[i] && !kboard[i] && !current[chan]->next->kboard_s[i])
+						playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXDPAD; i++)
+					if (current[chan]->dpad_s[i] && !dpad[i])
+						playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
 			}		
 		}
 
@@ -154,13 +161,18 @@ void loop() {
 			if (channel > 3) channel = (byte) 1;
 		}
 		
-		nextStep();
+		nextStep();						// ALL STEPS INCREMENTED
 		display(current[channel-1]->stepnumber);
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
-			if (current[chan] != NULL) { // Play all step notes and begin counting for gate
-				for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
-				for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
+			if (current[chan] != NULL) { // PLAY all step notes in all unmuted channels
+				if (npressed < 1)		 // If the user is currently playing this step no note will play to avoid overruling (if monophonic)
+					for (int i = 0; i < MAXKEYS; i++)
+						if (current[chan]->kboard_s[i])
+							playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXDPAD; i++) // Drums are played nonetheless because drums already layered won't overrule
+					if (current[chan]->dpad_s[i] && !dpad[i])
+						playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
 			}
 		}
 		last_gate = millis();
@@ -171,8 +183,12 @@ void loop() {
 		sem_gate--;
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
-			for (int i = 0; i < MAXKEYS; i++) if (current[chan]->kboard_s[i] && !kboard[i]) playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
-			for (int i = 0; i < MAXDPAD; i++) if (current[chan]->dpad_s[i] && !dpad[i]) playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
+			for (int i = 0; i < MAXKEYS; i++)
+				if (current[chan]->kboard_s[i] && !kboard[i])
+					playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+			for (int i = 0; i < MAXDPAD; i++)
+				if (current[chan]->dpad_s[i] && !dpad[i])
+					playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
 		}		
 	}
 
@@ -190,8 +206,10 @@ void loop() {
 	}
 
 	if (digitalRead(OW)) {
-		if (npressed > 0) for (int i = 0; i < MAXKEYS; i++) current[channel-1]->kboard_s[i] = kboard[i];
-		if (dpadhit) for (int i = 0; i < MAXDPAD; i++) current[channel-1]->dpad_s[i] = dpad[i];
+		if (npressed > 0) for (int i = 0; i < MAXKEYS; i++)
+			current[channel-1]->kboard_s[i] = kboard[i];
+		if (dpadhit) for (int i = 0; i < MAXDPAD; i++)
+			current[channel-1]->dpad_s[i] = dpad[i] || current[channel-1]->dpad_s[i]; // Drum hits aren't exclusive!
 		current[channel-1]->clean = LOW;
 	}
 }
@@ -211,7 +229,7 @@ octst scan(int nOct) {          // This function reads the 12 NOTE pins and retu
 }
 
 void display(int number){
-	for(int i = 0; i < 4; i++) {
+	for(int i = 0; i < NBITS; i++) {
 		digitalWrite(LEDS[i], number & (unsigned short) 1);
 		number = number >> 1;
 	}
