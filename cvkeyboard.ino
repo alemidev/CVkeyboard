@@ -1,6 +1,7 @@
-#include <CapacitiveSensor.h>
 #include <MIDI.h>
 #include <HID.h>
+#include <Wire.h>
+#include <Adafruit_MPR121.h>
 
 #define BPQN 24 // Ableton sends 24, VCV rack only one, by standard should be 24?
 
@@ -36,18 +37,17 @@ int NOTE[12] = {            // Pins used to read each note (C is 0, B is 11)
   22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44 };
 int OCTAVE[4] = {           // Pins associated to each OCTAVE's contact bar
   12, 9, 8, 10 };
-int SEND[3] = {            // Pins used as sender for capacitive touch buttons
-  5, 4, 16 };
-int RECEIVE[3] = {         // Pins used as receiver for capacitive touch buttons
-  6, 1, 17 };
 int LEDS[NBITS] = {         // Pins used for leds
-  15, 3, 21, 20, 19, 18 };
+  14, 15, 16, 17, 18, 19 };
 int OW = 2;					// Pin used for overwrite switch
-int DEL = -1;				// Pin used for delete button
-int ADD = 14;				// Pin used for add button
+int DEL = 11;				// Capacitive button used for DELETE button
+int PLUS = 10;				// Capacitive button used for PLUS button
+int MINUS = 9;				// Capacitive button used for MINUS button
 
 		// GLOBAL SETTINGS
 //bool overwrite;               // Step content is overwritten with pressed keys, could not be needed
+int pentathonic[10] = {			// Used to quantize drum notes
+	0, 2, 5, 7, 9, 12, 14, 17, 19, 21 };
 
 		// PLACEHOLDERS
 byte velocity = 100;          // 
@@ -76,28 +76,24 @@ bool dpadhit = LOW;				// If any drum pad has been hit in this cycle, this is tr
 int npressed;             // Number of keys pressed, used to avoid doing anything when no keys are pressed
 bool kboard[MAXKEYS];            // Last status of keyboard
 bool dpad[MAXDPAD];           // Last status of Capacitive Buttons
-CapacitiveSensor* bCap[MAXDPAD];
+int cap_read = 0;
 
+Adafruit_MPR121 cap = Adafruit_MPR121();
 
 void setup() {
+	display(1);
 	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
 	for (int cNOTE = 0; cNOTE < 12; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
 	for (int cLED = 0; cLED < NBITS; cLED++) pinMode(LEDS[cLED], OUTPUT);
-	for (int cButton = 0; cButton < MAXDPAD; cButton++) {                 // Capacitive Buttons configuration
-		bCap[cButton] = new CapacitiveSensor(SEND[cButton], RECEIVE[cButton]);  // Initialized
-		bCap[cButton]->set_CS_AutocaL_Millis(0xFFFFFFFF);             // No recalibration
-		bCap[cButton]->set_CS_Timeout_Millis(1);                  // Timeout set to 20ms (instead of 2s)
-		dpad[cButton] = LOW;                          // Button starts LOW
-	}
-
+	display(3);
+	while (!cap.begin(0x5A)) delay(10);					// If MPR121 is not ready, wait for it
+	display(7);
 	for (int cStat = 0; cStat < MAXKEYS; cStat++) kboard[cStat] = LOW;         // All keyboard keys start LOW
-
+	display(15);
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200); 								// Uncomment this if you use Hairless and set baud rate
-
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
-	pinMode(ADD, INPUT_PULLUP);                           // Used for overwrite switch
-
+	display(31);
 	for (int i = 0; i < 6; i++){
 		current[i] = NULL;
 		head[i] = NULL;
@@ -105,25 +101,15 @@ void setup() {
 		mute[i] = LOW;
 	}
 	channel = (byte) 1;
-
-	for (int i = 0; i < 64; i++) {						// Boot up fancyness! NBITS*NBITS
-		display(i);
-		delay(50);
-	}
-
-	// ONLY FOR DEBUG
-	for (int i=0; i<64; i++) insertStep((byte) 0);
-	for (int i=0; i<32; i++) insertStep((byte) 1);
-	for (int i=0; i<16; i++) insertStep((byte) 2);
-
-	display(0);
+	display(63);
 }
 
 void loop() {
 	sync();
-	// add_step = (add_step || !digitalRead(ADD));
-	// del_step = (del_step || !digitalRead(DEL));
-	chan_up = (chan_up || !digitalRead(ADD));
+
+	if (current[channel-1] == NULL) display(analogRead(channel));
+	else display(current[channel-1]->stepnumber);
+	cap_read = cap.touched();
 
 	if (sem_beat > 0) {
 		sem_beat--;
@@ -165,11 +151,11 @@ void loop() {
 		display(current[channel-1]->stepnumber);
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
+			if (npressed > 0 && chan == (int) channel-1) continue; // If the user is playing in this channel no note should be played
 			if (current[chan] != NULL) { // PLAY all step notes in all unmuted channels
-				if (npressed < 1)		 // If the user is currently playing this step no note will play to avoid overruling (if monophonic)
-					for (int i = 0; i < MAXKEYS; i++)
-						if (current[chan]->kboard_s[i])
-							playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
+				for (int i = 0; i < MAXKEYS; i++)
+					if (current[chan]->kboard_s[i] && !kboard[i])
+						playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
 				for (int i = 0; i < MAXDPAD; i++) // Drums are played nonetheless because drums already layered won't overrule
 					if (current[chan]->dpad_s[i] && !dpad[i])
 						playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
@@ -194,7 +180,10 @@ void loop() {
 
 	dpadhit = LOW;
 	for (int cButton = 0; cButton < MAXDPAD; cButton++) {
-		dpad[cButton] = evalButton(bCap[cButton], dpad[cButton], cButton);
+		if (( 1 & (cap_read >> cButton)) ^ dpad[cButton]) {
+			dpad[cButton] = (bool) 1 & (cap_read >> cButton);
+			playDrum(cButton, dpad[cButton], channel);
+		}
 		dpadhit = (dpad[cButton] || dpadhit);
 	}
 
@@ -235,26 +224,6 @@ void display(int number){
 	}
 }
 
-bool evalButton(CapacitiveSensor* b, bool value, int note_number) {
-	long sensor = b->capacitiveSensor(1);
-	// Serial.println(sensor);
-
-	if (sensor > 15) {
-		if (value) return HIGH;
-		else {
-			playDrum(note_number, HIGH, channel);
-			return HIGH;
-		}
-	}
-	else {
-		if (!value) return LOW;
-		else {
-			playDrum(note_number, LOW, channel);
-			return LOW;
-		}
-	}
-}
-
 // NOTE Functions
 
 int eval(octst input) {
@@ -282,7 +251,8 @@ void playNote(int c, bool status, byte chan) {
 }
 
 void playDrum(int c, bool status, byte chan) {
-	byte n = c + drumOffset;
+	// The note is first quantized to a pentathonic and then scaled up to start at C4.
+	byte n = (byte) (pentathonic[c] + drumOffset);
 	if (status == HIGH) {
 		MIDI.sendNoteOn(n, velocity, chan + (byte) DRUMSHIFT);
 	}
@@ -313,6 +283,7 @@ link newStep() {
 }
 
 bool insertStep(byte chan) {
+	// Creates a new enpty step and places it as next step in the channel passed as argument
 	link newS = newStep();
 	link buffer;
 
@@ -329,12 +300,15 @@ bool insertStep(byte chan) {
 		nstep[chan] = 1;
 	}
 	else {
-		newS->stepnumber = nstep[chan];
-		buffer = current[chan];
-		while (buffer->next != head[chan]) buffer = buffer->next;
-		buffer->next = newS;
-		newS->next = head[chan];
+		newS->stepnumber = current[chan]->stepnumber +1;
+		buffer = current[chan]->next;
+		current[chan]->next = newS;
+		newS->next = buffer;
 		nstep[chan]++;
+		while (buffer != head[chan]) {
+			buffer->stepnumber++;
+			buffer = buffer->next;
+		}
 	}
 	return HIGH;
 }
