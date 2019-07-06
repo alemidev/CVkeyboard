@@ -52,6 +52,7 @@ int pentathonic[10] = {			// Used to quantize drum notes
 		// PLACEHOLDERS
 byte velocity = 100;          // 
 int bpm = 360;              // 
+bool chan_up = LOW;
 
 
 		// SEQUENCER POINTERS AND RELATED ARRAYS
@@ -65,8 +66,9 @@ byte channel;           // Current selected channel. Drums are shifted of DRUMSH
 		// SYSTEM VARIABLES
 int arp = 0;              // Keeps track of last played NOTE if arpeggiating
 int midiclock = 0;              // Used to sync with MIDI clock
-bool add_step = LOW;			// This is used to remember the addition of a step
-bool del_step = LOW;			// This is used to remember the deletion of a step
+bool plus_step = LOW;			// This is used to remember the addition of a step
+bool minus_step = LOW;			// This is used to remember the deletion of a step
+bool clear_step = LOW;			// This is used to remember the clearing of a step
 bool chan_up = LOW;				// Only for now because I have few buttons :C
 int sem_beat = 0;              // Basic semaphore used to sync with MIDI beat
 int sem_gate = 0;				// Basic semaphore used for gate timing
@@ -109,7 +111,19 @@ void loop() {
 
 	if (current[channel-1] == NULL) display(analogRead(channel));
 	else display(current[channel-1]->stepnumber);
+
 	cap_read = cap.touched();
+	plus_step = plus_step || ((cap_read >> PLUS) & 1);
+	minus_step = minus_step || ((cap_read >> MINUS) & 1);
+	clear_step = clear_step || ((cap_read >> DEL) & 1);
+
+	if (chan_up != (bool) ((cap_read >> 8) & 1)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
+			chan_up = (bool) ((cap_read >> 8) & 1);
+			if (chan_up == LOW) {
+				channel++;
+				if (channel > 3) channel = (byte) 1;
+			}
+		}
 
 	if (sem_beat > 0) {
 		sem_beat--;
@@ -127,28 +141,29 @@ void loop() {
 			}		
 		}
 
-		if (add_step && !del_step) {
-			add_step = LOW;
+		if (plus_step && minus_step) {
+			plus_step = LOW;
+			minus_step = LOW;
+		}
+		if (plus_step) {
+			plus_step = LOW;
 			if (nstep[channel-1] < MAXSTEP) insertStep(channel-1);
 		}
-		if (del_step && !add_step) {
-			del_step = LOW;
-			if (nstep[channel-1] < MAXSTEP) deleteStep(channel-1);
+		if (minus_step) {
+			minus_step = LOW;
+			if (nstep[channel-1] > 0) deleteStep(channel-1);
 		}
-		if (add_step && del_step) {
-			add_step = LOW;
-			del_step = LOW;
-		}
+		if (clear_step) {
+			clear_step = LOW;
+			if (current[channel-1] != NULL) {
+				for (int i = 0; i < MAXKEYS; i++) current[channel-1]->kboard_s[i] = LOW;
+				for (int i = 0; i < MAXDPAD; i++) current[channel-1]->dpad_s[i] = LOW;
+			}
+		}		
 
-		// ONLY FOR NOW because I don't have enough buttons :C
-		if (chan_up) {
-			chan_up = LOW;
-			channel++;
-			if (channel > 3) channel = (byte) 1;
-		}
-		
-		nextStep();						// ALL STEPS INCREMENTED
+		nextStep();								// ALL STEPS INCREMENTED
 		display(current[channel-1]->stepnumber);
+
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
 			if (npressed > 0 && chan == (int) channel-1) continue; // If the user is playing in this channel no note should be played
@@ -323,42 +338,35 @@ void nextStep() {
 bool deleteStep(byte chan) {
 	if (nstep[chan] < 1) return LOW;
 
-	if (!current[chan]->clean) {
-		for (int i = 0; i < MAXKEYS; i++) current[chan]->kboard_s[i] = LOW;
-		for (int i = 0; i < MAXDPAD; i++) current[chan]->dpad_s[i] = LOW;
-		current[chan]->clean = HIGH;
-		return LOW;
-	}
-
 	if (nstep[chan] == 1) {
 		free(current[chan]);
 		head[chan] = NULL;
 		current[chan] = NULL;
+		return HIGH;
+	}
+	
+	link buffer = current[chan];
+	while (buffer->next != current[chan]) buffer = buffer->next;
+	current[chan] = buffer;
+	buffer->next = current[chan]->next;
+	if (current[chan] == head[chan]) {
+		head[chan] = head[chan]->next;
+		int i = 0;
+		buffer = head[chan];
+		do {
+			buffer->stepnumber = i;
+			buffer = buffer->next;
+			i++;
+		} while (buffer != head[chan]);
 	}
 	else {
-		link buffer = current[chan];
-		while (buffer->next != current[chan]) buffer = buffer->next;
-		buffer->next = current[chan]->next;
-		if (current[chan] == head[chan]) {
-			head[chan] = head[chan]->next;
-			int i = 0;
-			buffer = head[chan];
-			do {
-				buffer->stepnumber = i;
-				buffer = buffer->next;
-				i++;
-			} while (buffer != head[chan]);
-		}
-		else {
-			buffer = buffer->next;
-			while (buffer != head[chan]) {
-				buffer->stepnumber--;
-				buffer = buffer->next;
-			}
-		}
-		free(current[chan]);
 		buffer = buffer->next;
+		while (buffer != head[chan]) {
+			buffer->stepnumber--;
+			buffer = buffer->next;
+		}
 	}
+	free(current[chan]);
 	nstep[chan]--;
 	return HIGH;
 }
