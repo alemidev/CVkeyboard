@@ -12,8 +12,9 @@
 #define MIDICLOCK 0xf8
 #define MAXKEYS 48
 #define MAXDPAD 3
-#define MAXSTEP 16
+#define MAXSTEP 64
 #define NBITS 6
+#define DEBOUNCE 100
 
 MIDI_CREATE_DEFAULT_INSTANCE();
                                                       
@@ -38,22 +39,20 @@ int NOTE[12] = {            // Pins used to read each note (C is 0, B is 11)
 int OCTAVE[4] = {           // Pins associated to each OCTAVE's contact bar
   12, 9, 8, 10 };
 int LEDS[NBITS] = {         // Pins used for leds
-  14, 15, 16, 17, 18, 19 };
+  5, 4, 3, 14, 16, 18 };
 int OW = 2;					// Pin used for overwrite switch
+int NEXT = 51;				// Pin used for next step switch
 int DEL = 11;				// Capacitive button used for DELETE button
 int PLUS = 10;				// Capacitive button used for PLUS button
 int MINUS = 9;				// Capacitive button used for MINUS button
 
 		// GLOBAL SETTINGS
-//bool overwrite;               // Step content is overwritten with pressed keys, could not be needed
 int pentathonic[10] = {			// Used to quantize drum notes
 	0, 2, 5, 7, 9, 12, 14, 17, 19, 21 };
 
 		// PLACEHOLDERS
 byte velocity = 100;          // 
-int bpm = 360;              // 
-bool chan_up = LOW;
-
+int bpm = 360;              //
 
 		// SEQUENCER POINTERS AND RELATED ARRAYS
 link head[6];
@@ -70,10 +69,12 @@ bool plus_step = LOW;			// This is used to remember the addition of a step
 bool minus_step = LOW;			// This is used to remember the deletion of a step
 bool clear_step = LOW;			// This is used to remember the clearing of a step
 bool chan_up = LOW;				// Only for now because I have few buttons :C
+bool next_step = LOW;			// Used to wait for a full switch cycle
 int sem_beat = 0;              // Basic semaphore used to sync with MIDI beat
 int sem_gate = 0;				// Basic semaphore used for gate timing
 unsigned long last_gate = 0;			// Gate start time for last sequencer step
 unsigned long gate_length = 1000;        // ms of keypress if arpeggiator
+unsigned long last_next = 0;
 bool dpadhit = LOW;				// If any drum pad has been hit in this cycle, this is true
 int npressed;             // Number of keys pressed, used to avoid doing anything when no keys are pressed
 bool kboard[MAXKEYS];            // Last status of keyboard
@@ -83,19 +84,15 @@ int cap_read = 0;
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
 void setup() {
-	display(1);
 	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
 	for (int cNOTE = 0; cNOTE < 12; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
 	for (int cLED = 0; cLED < NBITS; cLED++) pinMode(LEDS[cLED], OUTPUT);
-	display(3);
 	while (!cap.begin(0x5A)) delay(10);					// If MPR121 is not ready, wait for it
-	display(7);
 	for (int cStat = 0; cStat < MAXKEYS; cStat++) kboard[cStat] = LOW;         // All keyboard keys start LOW
-	display(15);
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200); 								// Uncomment this if you use Hairless and set baud rate
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
-	display(31);
+	pinMode(NEXT, INPUT_PULLUP);                           // Used for overwrite switch
 	for (int i = 0; i < 6; i++){
 		current[i] = NULL;
 		head[i] = NULL;
@@ -103,27 +100,37 @@ void setup() {
 		mute[i] = LOW;
 	}
 	channel = (byte) 1;
-	display(63);
+	for (int i=0; i<NBITS; i++) {
+		digitalWrite(LEDS[i], HIGH);
+		delay(10);
+	}
+	last_gate = millis();
+	last_next = millis();
+	display(0);
 }
 
 void loop() {
 	sync();
+	cap_read = cap.touched();
 
-	if (current[channel-1] == NULL) display(analogRead(channel));
+	if ((cap_read >> 8) & 1) {				// Only for now!
+		for (int i=0; i<NBITS; i++) digitalWrite(LEDS[i], LOW);
+		digitalWrite(LEDS[channel-1], HIGH);
+	} 
+	else if (current[channel-1] == NULL) display(analogRead(channel));
 	else display(current[channel-1]->stepnumber);
 
-	cap_read = cap.touched();
 	plus_step = plus_step || ((cap_read >> PLUS) & 1);
 	minus_step = minus_step || ((cap_read >> MINUS) & 1);
 	clear_step = clear_step || ((cap_read >> DEL) & 1);
 
 	if (chan_up != (bool) ((cap_read >> 8) & 1)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
-			chan_up = (bool) ((cap_read >> 8) & 1);
-			if (chan_up == LOW) {
-				channel++;
-				if (channel > 3) channel = (byte) 1;
-			}
+		chan_up = (bool) ((cap_read >> 8) & 1);
+		if (chan_up == HIGH) {
+			channel++;
+			if (channel > 6) channel = (byte) 1;
 		}
+	}
 
 	if (sem_beat > 0) {
 		sem_beat--;
@@ -166,11 +173,11 @@ void loop() {
 
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
-			if (npressed > 0 && chan == (int) channel-1) continue; // If the user is playing in this channel no note should be played
 			if (current[chan] != NULL) { // PLAY all step notes in all unmuted channels
-				for (int i = 0; i < MAXKEYS; i++)
-					if (current[chan]->kboard_s[i] && !kboard[i])
-						playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
+				if (!(npressed > 0 && chan == (int) channel-1))
+					for (int i = 0; i < MAXKEYS; i++)
+						if (current[chan]->kboard_s[i] && !kboard[i])
+							playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
 				for (int i = 0; i < MAXDPAD; i++) // Drums are played nonetheless because drums already layered won't overrule
 					if (current[chan]->dpad_s[i] && !dpad[i])
 						playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
@@ -209,7 +216,7 @@ void loop() {
 		digitalWrite(OCTAVE[cOCTAVE], LOW);
 	}
 
-	if (digitalRead(OW)) {
+	if (current[channel-1] != NULL && digitalRead(OW)) {
 		if (npressed > 0) for (int i = 0; i < MAXKEYS; i++)
 			current[channel-1]->kboard_s[i] = kboard[i];
 		if (dpadhit) for (int i = 0; i < MAXDPAD; i++)
@@ -279,6 +286,13 @@ void playDrum(int c, bool status, byte chan) {
 // Sync functions
 
 void sync() {
+	if (next_step != (bool) !digitalRead(NEXT)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
+		next_step = (bool) !digitalRead(NEXT);
+		if (millis() > last_next+DEBOUNCE && next_step == HIGH) {
+			last_next = millis();
+			sem_beat++;
+		}
+	}
 	if (Serial.available()) {
 		if (Serial.read() == MIDICLOCK) {
 			//sem_beat++;
@@ -313,18 +327,19 @@ bool insertStep(byte chan) {
 		current[chan] = newS;
 		head[chan] = newS;
 		nstep[chan] = 1;
+		return HIGH;
 	}
-	else {
-		newS->stepnumber = current[chan]->stepnumber +1;
-		buffer = current[chan]->next;
-		current[chan]->next = newS;
-		newS->next = buffer;
-		nstep[chan]++;
-		while (buffer != head[chan]) {
-			buffer->stepnumber++;
-			buffer = buffer->next;
-		}
+
+	newS->stepnumber = current[chan]->stepnumber +1;
+	buffer = current[chan]->next;
+	current[chan]->next = newS;
+	newS->next = buffer;
+	nstep[chan]++;
+	while (buffer != head[chan]) {
+		buffer->stepnumber++;
+		buffer = buffer->next;
 	}
+
 	return HIGH;
 }
 
@@ -346,27 +361,16 @@ bool deleteStep(byte chan) {
 	}
 	
 	link buffer = current[chan];
-	while (buffer->next != current[chan]) buffer = buffer->next;
-	current[chan] = buffer;
-	buffer->next = current[chan]->next;
-	if (current[chan] == head[chan]) {
-		head[chan] = head[chan]->next;
-		int i = 0;
-		buffer = head[chan];
-		do {
-			buffer->stepnumber = i;
-			buffer = buffer->next;
-			i++;
-		} while (buffer != head[chan]);
+	while (buffer->next != current[chan]) buffer = buffer->next; // Search for previous step
+	buffer->next = current[chan]->next;							// Skip step which is being deleted
+	if (current[chan] == head[chan]) head[chan] = head[chan]->next;	// If deleting head, head moves forward
+	free(current[chan]);										// Step is actually deleted
+	nstep[chan]--;												// Decreased the counter
+	current[chan] = buffer;										// Current step becomes previous step
+	buffer = buffer->next;										// Skip the current step which was just before deleted step
+	while(buffer != head[chan]) {								// If this is not the head,
+		buffer->stepnumber--;									// 	decrease counter
+		buffer = buffer->next;									//	and move on
 	}
-	else {
-		buffer = buffer->next;
-		while (buffer != head[chan]) {
-			buffer->stepnumber--;
-			buffer = buffer->next;
-		}
-	}
-	free(current[chan]);
-	nstep[chan]--;
 	return HIGH;
 }
