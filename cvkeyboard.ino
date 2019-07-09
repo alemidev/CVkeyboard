@@ -11,7 +11,7 @@
 #define MINUTE 60000
 #define MIDICLOCK 0xf8
 #define MAXKEYS 48
-#define MAXDPAD 3
+#define MAXDPAD 7
 #define MAXSTEP 64
 #define NBITS 6
 #define DEBOUNCE 100
@@ -39,8 +39,8 @@ int NOTE[12] = {            // Pins used to read each note (C is 0, B is 11)
 int OCTAVE[4] = {           // Pins associated to each OCTAVE's contact bar
   12, 9, 8, 10 };
 int LEDS[NBITS] = {         // Pins used for leds
-  5, 4, 3, 14, 16, 18 };
-int OW = 2;					// Pin used for overwrite switch
+  5, 4, 2, 14, 16, 18 };
+int OW = 3;					// Pin used for overwrite switch
 int NEXT = 51;				// Pin used for next step switch
 int DEL = 11;				// Capacitive button used for DELETE button
 int PLUS = 10;				// Capacitive button used for PLUS button
@@ -316,7 +316,11 @@ bool insertStep(byte chan) {
 	link newS = newStep();
 	link buffer;
 
-	if (newS == NULL) return LOW;
+	if (newS == NULL) {
+		display(63);
+		delay(500);
+		return LOW;
+	}
 
 	for (int i = 0; i < MAXKEYS; i++) newS->kboard_s[i] = LOW;
 	for (int i = 0; i < MAXDPAD; i++) newS->dpad_s[i] = LOW;
@@ -334,11 +338,19 @@ bool insertStep(byte chan) {
 	buffer = current[chan]->next;
 	current[chan]->next = newS;
 	newS->next = buffer;
-	nstep[chan]++;
-	while (buffer != head[chan]) {
-		buffer->stepnumber++;
+	
+	int c = 0;
+	buffer = head[chan];
+
+	buffer->stepnumber = c;
+	c++;
+	buffer = buffer->next;
+	while(buffer != head[chan]) {
+		buffer->stepnumber = c;
+		c++;
 		buffer = buffer->next;
 	}
+	nstep[chan] = c;
 
 	return HIGH;
 }
@@ -365,12 +377,19 @@ bool deleteStep(byte chan) {
 	buffer->next = current[chan]->next;							// Skip step which is being deleted
 	if (current[chan] == head[chan]) head[chan] = head[chan]->next;	// If deleting head, head moves forward
 	free(current[chan]);										// Step is actually deleted
-	nstep[chan]--;												// Decreased the counter
 	current[chan] = buffer;										// Current step becomes previous step
-	buffer = buffer->next;										// Skip the current step which was just before deleted step
-	while(buffer != head[chan]) {								// If this is not the head,
-		buffer->stepnumber--;									// 	decrease counter
-		buffer = buffer->next;									//	and move on
+
+	int c = 0;
+	buffer = head[chan];
+
+	buffer->stepnumber = c;
+	c++;
+	buffer = buffer->next;
+	while(buffer != head[chan]) {
+		buffer->stepnumber = c;
+		c++;
+		buffer = buffer->next;
 	}
+	nstep[chan] = c;
 	return HIGH;
 }
