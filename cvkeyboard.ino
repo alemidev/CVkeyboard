@@ -1,6 +1,7 @@
 #include <MIDI.h>
 #include <HID.h>
 #include <Wire.h>
+#include <EEPROM.h>
 #include <Adafruit_MPR121.h>
 
 #define BPQN 24 // Ableton sends 24, VCV rack only one, by standard should be 24?
@@ -8,35 +9,43 @@
 #define NOTEOffset 36
 #define DRUMSHIFT 6
 #define drumOffset 60
+
 #define MINUTE 60000
+#define INTERVAL 15						// How many minutes between autosave
 #define MIDICLOCK 0xf8
+
 #define MAXKEYS 48
 #define MAXDPAD 7
 #define MAXSTEP 64
+#define MAXCHANNEL 6
+#define NKEYS 12
+#define NOCTAVES 4
 #define NBITS 6
+
 #define DEBOUNCE 100
 
 MIDI_CREATE_DEFAULT_INSTANCE();
                                                       
 typedef struct SequencerStep* link;
 
-typedef struct OCTAVEStatus {      // This struct is for an OCTAVE status. Each bool is for 1 NOTE
-	bool stat[12];
-	int nOct;
-} octst;
+typedef struct SavePoint {
+	int headAddr[MAXCHANNEL];
+	int tailAddr[MAXCHANNEL];
+} save_p;
 
 typedef struct SequencerStep {
-	bool clean = LOW;
-	bool kboard_s[MAXKEYS];
-	bool dpad_s[MAXDPAD];
+	int kboard_s[4];
+	int dpad_s;
 	unsigned short stepnumber;
 	link next;
 } step;
 
+save_p saveH;
+
 // PIN DECLARATIONS
-int NOTE[12] = {            // Pins used to read each note (C is 0, B is 11)
+int NOTE[NKEYS] = {            // Pins used to read each note (C is 0, B is 11)
   22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44 };
-int OCTAVE[4] = {           // Pins associated to each OCTAVE's contact bar
+int OCTAVE[NOCTAVES] = {           // Pins associated to each OCTAVE's contact bar
   12, 9, 8, 10 };
 int LEDS[NBITS] = {         // Pins used for leds
   5, 4, 2, 14, 16, 18 };
@@ -46,9 +55,11 @@ int DEL = 11;				// Capacitive button used for DELETE button
 int PLUS = 10;				// Capacitive button used for PLUS button
 int MINUS = 9;				// Capacitive button used for MINUS button
 
-		// GLOBAL SETTINGS
+		// USEFUL ITERABLES
 int pentathonic[10] = {			// Used to quantize drum notes
 	0, 2, 5, 7, 9, 12, 14, 17, 19, 21 };
+int loadingDisplay[6] = {
+	1, 3, 7, 15, 31, 63};
 
 		// PLACEHOLDERS
 byte velocity = 100;          // 
@@ -72,41 +83,48 @@ bool chan_up = LOW;				// Only for now because I have few buttons :C
 bool next_step = LOW;			// Used to wait for a full switch cycle
 int sem_beat = 0;              // Basic semaphore used to sync with MIDI beat
 int sem_gate = 0;				// Basic semaphore used for gate timing
-unsigned long last_gate = 0;			// Gate start time for last sequencer step
-unsigned long gate_length = 1000;        // ms of keypress if arpeggiator
-unsigned long last_next = 0;
+unsigned long last_gate;			// Gate start time for last sequencer step
+unsigned long last_next;
+unsigned long last_save;
+unsigned long gate_length = 200;        // ms of keypress if arpeggiator
 bool dpadhit = LOW;				// If any drum pad has been hit in this cycle, this is true
-int npressed;             // Number of keys pressed, used to avoid doing anything when no keys are pressed
-bool kboard[MAXKEYS];            // Last status of keyboard
-bool dpad[MAXDPAD];           // Last status of Capacitive Buttons
-int cap_read = 0;
+int npressed;             	// Number of keys pressed, used to avoid doing anything when no keys are pressed
+int kboard[4];            	// Last status of keyboard
+int dpad;           		// Last status of Capacitive Buttons
+int cap_read;
+int difference = 0;			// Used in many places, might as well be a global variable
 
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
 void setup() {
-	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
-	for (int cNOTE = 0; cNOTE < 12; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
+	display(loadingDisplay[0]);
+	for (int cOCTAVE = 0; cOCTAVE < NOCTAVES; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
+	for (int cNOTE = 0; cNOTE < NKEYS; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
 	for (int cLED = 0; cLED < NBITS; cLED++) pinMode(LEDS[cLED], OUTPUT);
-	while (!cap.begin(0x5A)) delay(10);					// If MPR121 is not ready, wait for it
-	for (int cStat = 0; cStat < MAXKEYS; cStat++) kboard[cStat] = LOW;         // All keyboard keys start LOW
+	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
+	pinMode(NEXT, INPUT_PULLUP);
+	display(loadingDisplay[1]);
 	MIDI.begin(MIDI_CHANNEL_OFF);
 	Serial.begin(115200); 								// Uncomment this if you use Hairless and set baud rate
-	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
-	pinMode(NEXT, INPUT_PULLUP);                           // Used for overwrite switch
+	display(loadingDisplay[2]);
 	for (int i = 0; i < 6; i++){
 		current[i] = NULL;
 		head[i] = NULL;
 		nstep[i] = 0;
 		mute[i] = LOW;
 	}
+	display(loadingDisplay[3]);
+	for (int cOCTAVE = 0; cOCTAVE < NOCTAVES; cOCTAVE++) kboard[cOCTAVE] = 0;
+	dpad = 0;
+	cap_read = 0;
 	channel = (byte) 1;
-	for (int i=0; i<NBITS; i++) {
-		digitalWrite(LEDS[i], HIGH);
-		delay(10);
-	}
+	display(loadingDisplay[4]);
+	while (!cap.begin(0x5A)) delay(10);					// If MPR121 is not ready, wait for it
+	display(loadingDisplay[5]);
+	loadAll();
+	last_save = millis();
 	last_gate = millis();
 	last_next = millis();
-	display(0);
 }
 
 void loop() {
@@ -138,14 +156,16 @@ void loop() {
 		if (sem_gate > 0) {		// If step was shorter than GATE, close all open notes before next step
 			sem_gate--;
 			for (int chan = 0; chan < 6; chan++) {
-				if (mute[chan]) continue;
-				for (int i = 0; i < MAXKEYS; i++)
-					if (current[chan]->kboard_s[i] && !kboard[i] && !current[chan]->next->kboard_s[i])
-						playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+				if (current[chan] == NULL) continue;
+				for (int i = 0; i < NOCTAVES; i++)
+					for (int j = 0; j < NKEYS; j++)
+						if (((current[chan]->kboard_s[i] >> j) & 1) && !(chan+1 != channel && ((kboard[i]>>j) & 1)))
+							playNote((i*NKEYS)+j, LOW, (byte) chan+1);
+			
 				for (int i = 0; i < MAXDPAD; i++)
-					if (current[chan]->dpad_s[i] && !dpad[i])
-						playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
-			}		
+					if (((current[chan]->dpad_s >> i) & 1) && !(chan+1 != channel && ((dpad>>i) & 1)))
+						playDrum(i, LOW, (byte) chan+1);
+			}			
 		}
 
 		if (plus_step && minus_step) {
@@ -163,8 +183,8 @@ void loop() {
 		if (clear_step) {
 			clear_step = LOW;
 			if (current[channel-1] != NULL) {
-				for (int i = 0; i < MAXKEYS; i++) current[channel-1]->kboard_s[i] = LOW;
-				for (int i = 0; i < MAXDPAD; i++) current[channel-1]->dpad_s[i] = LOW;
+				for (int i = 0; i < NOCTAVES; i++) current[channel-1]->kboard_s[i] = 0;
+				current[channel-1]->dpad_s = 0;
 			}
 		}		
 
@@ -174,13 +194,14 @@ void loop() {
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
 			if (current[chan] != NULL) { // PLAY all step notes in all unmuted channels
-				if (!(npressed > 0 && chan == (int) channel-1))
-					for (int i = 0; i < MAXKEYS; i++)
-						if (current[chan]->kboard_s[i] && !kboard[i])
-							playNote(i, current[chan]->kboard_s[i], (byte) chan+1);
-				for (int i = 0; i < MAXDPAD; i++) // Drums are played nonetheless because drums already layered won't overrule
-					if (current[chan]->dpad_s[i] && !dpad[i])
-						playDrum(i, current[chan]->dpad_s[i], (byte) chan+1);
+				for (int i = 0; i < NOCTAVES; i++)
+					for (int j = 0; j < NKEYS; j++)
+						if (((current[chan]->kboard_s[i] >> j) & 1) && !(chan+1 == channel && npressed > 0))
+							playNote((i*NKEYS)+j, HIGH, (byte) chan+1);
+
+				for (int i = 0; i < MAXDPAD; i++)	// Drums are played nonetheless because drums already layered won't overrule
+					if ((current[chan]->dpad_s >> i) & 1)
+						playDrum(i, HIGH, (byte) chan+1);
 			}
 		}
 		last_gate = millis();
@@ -190,51 +211,48 @@ void loop() {
 	if (sem_gate > 0 && (millis() - last_gate) > gate_length) {
 		sem_gate--;
 		for (int chan = 0; chan < 6; chan++) {
-			if (mute[chan]) continue;
-			for (int i = 0; i < MAXKEYS; i++)
-				if (current[chan]->kboard_s[i] && !kboard[i])
-					playNote(i, !current[chan]->kboard_s[i], (byte) chan+1);
+			if (current[chan] == NULL) continue;
+			for (int i = 0; i < NOCTAVES; i++)
+				for (int j = 0; j < NKEYS; j++)
+					if (((current[chan]->kboard_s[i] >> j) & 1) && !(chan+1 != channel && ((kboard[i]>>j) & 1)))
+						playNote((i*NKEYS)+j, LOW, (byte) chan+1);
+			
 			for (int i = 0; i < MAXDPAD; i++)
-				if (current[chan]->dpad_s[i] && !dpad[i])
-					playDrum(i, !current[chan]->dpad_s[i], (byte) chan+1);
+				if (((current[chan]->dpad_s >> i) & 1) && !(chan+1 != channel && ((dpad>>i) & 1)))
+					playDrum(i, LOW, (byte) chan+1);
 		}		
 	}
 
 	dpadhit = LOW;
-	for (int cButton = 0; cButton < MAXDPAD; cButton++) {
-		if (( 1 & (cap_read >> cButton)) ^ dpad[cButton]) {
-			dpad[cButton] = (bool) 1 & (cap_read >> cButton);
-			playDrum(cButton, dpad[cButton], channel);
-		}
-		dpadhit = (dpad[cButton] || dpadhit);
+	difference = dpad ^ cap_read;
+	for (int c = 0; c < MAXDPAD; c++) {
+		if ((difference>>c) & 1) playDrum(c, ((cap_read>>c) & 1), channel);
+		if (dpadhit || ((cap_read>>c) & 1)) dpadhit = HIGH;
+		if (difference != 0)  dpad = cap_read;
 	}
 
 	npressed = 0;
 	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) {
 		digitalWrite(OCTAVE[cOCTAVE], HIGH);
-		npressed += eval(scan(cOCTAVE));
+		npressed += eval(scan(), cOCTAVE);
 		digitalWrite(OCTAVE[cOCTAVE], LOW);
 	}
 
 	if (current[channel-1] != NULL && digitalRead(OW)) {
-		if (npressed > 0) for (int i = 0; i < MAXKEYS; i++)
-			current[channel-1]->kboard_s[i] = kboard[i];
-		if (dpadhit) for (int i = 0; i < MAXDPAD; i++)
-			current[channel-1]->dpad_s[i] = dpad[i] || current[channel-1]->dpad_s[i]; // Drum hits aren't exclusive!
-		current[channel-1]->clean = LOW;
+		if (npressed > 0) for (int i = 0; i < NOCTAVES; i++) {
+			difference = kboard[i] ^ current[channel-1]->kboard_s[i];
+			if (difference != 0) current[channel-1]->kboard_s[i] = kboard[i];
+		}
+		if (dpadhit) current[channel-1]->dpad_s = current[channel-1]->dpad_s | dpad; // Drum hits aren't exclusive!
 	}
 }
 
 // Hardware specific functions
 
-octst scan(int nOct) {          // This function reads the 12 NOTE pins and returns a struct
-	int c;                //       with 1 bool for each NOTE
-	octst output;
-
-	output.nOct = nOct;
-
-	for (c = 0; c < 12; c++) {
-		output.stat[c] = digitalRead(NOTE[c]);
+int scan() {          // This function reads the 12 NOTE pins and returns a struct
+	int output = 0;
+	for (int c = 0; c < NKEYS; c++) {
+		if (digitalRead(NOTE[c])) output = output | (1<<c);
 	}
 	return output;
 }
@@ -248,17 +266,16 @@ void display(int number){
 
 // NOTE Functions
 
-int eval(octst input) {
+int eval(int input, int nOct) {
 	int pressed = 0;
-	int sNOTE = input.nOct * 12;
+	int sNOTE = nOct * 12;
+	difference = kboard[nOct] ^ input;
 
 	for (int c = 0; c < 12; c++) {
-		if (input.stat[c] ^ kboard[c + sNOTE]) {
-			playNote(c + sNOTE, input.stat[c], channel);
-			kboard[c + sNOTE] = input.stat[c];
-		}
-		if (kboard[c + sNOTE] == HIGH) pressed++;
+		if ((difference>>c) & 1) playNote(c + sNOTE, ((input>>c) & 1), channel);
+		if (((input>>c) & 1)) pressed++;
 	}
+	if (difference != 0) kboard[nOct] = input;
 	return pressed;
 }
 
@@ -286,6 +303,12 @@ void playDrum(int c, bool status, byte chan) {
 // Sync functions
 
 void sync() {
+
+	if (millis() > last_save + (unsigned long) MINUTE*INTERVAL) {
+		saveAll();
+		last_save = millis();
+	}
+
 	if (next_step != (bool) !digitalRead(NEXT)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
 		next_step = (bool) !digitalRead(NEXT);
 		if (millis() > last_next+DEBOUNCE && next_step == HIGH) {
@@ -297,7 +320,7 @@ void sync() {
 		if (Serial.read() == MIDICLOCK) {
 			//sem_beat++;
 			midiclock++;
-			if (midiclock == BPQN){
+			if (midiclock == BPQN) {
 				midiclock = 0;
 				sem_beat++;
 			}
@@ -322,8 +345,8 @@ bool insertStep(byte chan) {
 		return LOW;
 	}
 
-	for (int i = 0; i < MAXKEYS; i++) newS->kboard_s[i] = LOW;
-	for (int i = 0; i < MAXDPAD; i++) newS->dpad_s[i] = LOW;
+	for (int i = 0; i < NOCTAVES; i++) newS->kboard_s[i] = 0;
+	newS->dpad_s = 0;
 
 	if (head[chan] == NULL) {
 		newS->next = newS;
@@ -392,4 +415,96 @@ bool deleteStep(byte chan) {
 	}
 	nstep[chan] = c;
 	return HIGH;
+}
+
+// SAVING FUNCTIONS
+
+void saveAll() {
+	int currAddr = (int) sizeof(save_p);
+	link buffer;
+
+	for (int c=0; c<MAXCHANNEL; c++) {
+		display(loadingDisplay[c]);
+		if (current[c] == NULL) {
+			saveH.headAddr[c] = -1;
+			saveH.tailAddr[c] = -1;
+			continue;
+		}
+		buffer = head[c];
+		saveH.headAddr[c] = currAddr;
+		currAddr = saveStep(buffer, currAddr);
+		buffer = buffer->next;
+		while (buffer != head[c]) {
+			currAddr = saveStep(buffer, currAddr);
+			buffer = buffer->next;
+		}
+		saveH.tailAddr[c] = currAddr;
+	}
+	saveHead(saveH);
+}
+
+void loadAll() {
+	saveH = loadHead();
+	int currAddr = saveH.headAddr[0];
+	link buffer;
+	for (int c=0; c<MAXCHANNEL; c++) {
+		display(loadingDisplay[c]);
+		if (saveH.headAddr[c] < 0) continue;
+		head[c] = newStep();
+		current[c] = head[c];
+		currAddr = saveH.headAddr[c];
+		currAddr = loadStep(head[c], currAddr);
+		buffer = head[c];
+		while (currAddr < saveH.tailAddr[c]) {
+			link newS = newStep();
+			currAddr = loadStep(newS, currAddr);
+			buffer->next = newS;
+			buffer = newS;
+		}
+		buffer->next = head[c];
+	}
+}
+
+save_p loadHead() {
+	save_p save;
+	byte* pointer = (byte*) (void*) &save;
+	int addr = 0;
+	for (int i=0; i < (int) sizeof(save_p); i++) {
+		*pointer = EEPROM.read(addr);
+		addr++;
+		pointer++;
+	}
+	return save;
+}
+
+void saveHead(save_p save) {
+	byte* pointer = (byte*) (void*) &save;
+	int addr = 0;
+	for (int i=0; i < (int) sizeof(save_p); i++){
+		EEPROM.update(addr, *pointer);
+		addr++;
+		pointer++;
+	}
+}
+
+int saveStep(link curr_step, int addr) {
+	step buffer = *curr_step;
+	buffer.next = (link) (addr + (int) sizeof(SequencerStep));
+	byte* pointer = (byte*) (void*) &buffer;
+	for (int i=0; i < (int) sizeof(SequencerStep); i++) {
+		EEPROM.update(addr, *pointer);
+		pointer++;
+		addr++;
+	}
+	return addr;
+}
+
+int loadStep(link step, int addr) {
+	byte* pointer = (byte*) (void*) step;
+	for (int i=0; i<(int) sizeof(SequencerStep); i++) {
+		*pointer = EEPROM.read(addr);
+		pointer++;
+		addr++;
+	}
+	return addr;
 }
