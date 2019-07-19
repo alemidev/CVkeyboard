@@ -54,6 +54,7 @@ int NEXT = 51;				// Pin used for next step switch
 int DEL = 11;				// Capacitive button used for DELETE button
 int PLUS = 10;				// Capacitive button used for PLUS button
 int MINUS = 9;				// Capacitive button used for MINUS button
+int ARP = 7;				// Capacitive button used for ARP button
 
 		// USEFUL ITERABLES
 int pentathonic[10] = {			// Used to quantize drum notes
@@ -74,13 +75,15 @@ bool mute[6];
 byte channel;           // Current selected channel. Drums are shifted of DRUMSHIFT channels (so channels can only be 6)
 
 		// SYSTEM VARIABLES
-int arp = 0;              // Keeps track of last played NOTE if arpeggiating
+int arp[2];             		// arp[0] = OCTAVE, arp[1] = KEY (arp[0] for iterations, arp[1] for shifting)
 int midiclock = 0;              // Used to sync with MIDI clock
+bool arpeggiating = LOW;		// Goes HIGH if the user is requesting an arpeggio
 bool plus_step = LOW;			// This is used to remember the addition of a step
 bool minus_step = LOW;			// This is used to remember the deletion of a step
 bool clear_step = LOW;			// This is used to remember the clearing of a step
 bool chan_up = LOW;				// Only for now because I have few buttons :C
 bool next_step = LOW;			// Used to wait for a full switch cycle
+bool overwrite = LOW;
 int sem_beat = 0;              // Basic semaphore used to sync with MIDI beat
 int sem_gate = 0;				// Basic semaphore used for gate timing
 unsigned long last_gate;			// Gate start time for last sequencer step
@@ -116,6 +119,8 @@ void setup() {
 	display(loadingDisplay[3]);
 	for (int cOCTAVE = 0; cOCTAVE < NOCTAVES; cOCTAVE++) kboard[cOCTAVE] = 0;
 	dpad = 0;
+	arp[0] = 0;
+	arp[1] = 0;
 	cap_read = 0;
 	channel = (byte) 1;
 	display(loadingDisplay[4]);
@@ -138,9 +143,11 @@ void loop() {
 	else if (current[channel-1] == NULL) display(analogRead(channel));
 	else display(current[channel-1]->stepnumber);
 
-	plus_step = plus_step || ((cap_read >> PLUS) & 1);
-	minus_step = minus_step || ((cap_read >> MINUS) & 1);
-	clear_step = clear_step || ((cap_read >> DEL) & 1);
+	plus_step = plus_step || (bool) ((cap_read >> PLUS) & 1);
+	minus_step = minus_step || (bool) ((cap_read >> MINUS) & 1);
+	clear_step = clear_step || (bool) ((cap_read >> DEL) & 1);
+	arpeggiating = (bool) ((cap_read >> ARP) & 1);
+	overwrite = digitalRead(OW);
 
 	if (chan_up != (bool) ((cap_read >> 8) & 1)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
 		chan_up = (bool) ((cap_read >> 8) & 1);
@@ -155,11 +162,12 @@ void loop() {
 
 		if (sem_gate > 0) {		// If step was shorter than GATE, close all open notes before next step
 			sem_gate--;
+			if (arpeggiating) playNote((arp[0]*NKEYS)+arp[1], LOW, channel);
 			for (int chan = 0; chan < 6; chan++) {
 				if (current[chan] == NULL) continue;
 				for (int i = 0; i < NOCTAVES; i++)
-					for (int j = 0; j < NKEYS; j++)
-						if (((current[chan]->kboard_s[i] >> j) & 1) && !(chan+1 != channel && ((kboard[i]>>j) & 1)))
+					for (int j = 0; j < NKEYS; j++) // IF note was played AND user is not playing on this channel AND this note is not kept played
+						if (((current[chan]->kboard_s[i] >> j) & 1) && !(chan+1 != channel && ((kboard[i]>>j) & 1)) && !((current[chan]->next->kboard_s[i] >> j) & 1))
 							playNote((i*NKEYS)+j, LOW, (byte) chan+1);
 			
 				for (int i = 0; i < MAXDPAD; i++)
@@ -191,6 +199,26 @@ void loop() {
 		nextStep();								// ALL STEPS INCREMENTED
 		display(current[channel-1]->stepnumber);
 
+		if (arpeggiating) {
+			while (npressed > 0) {
+				arp[1]++;
+				if (arp[1] == NKEYS) {
+					arp[1] = 0;
+					arp[0]++;
+				}
+				if (arp[0] == NOCTAVES) arp[0] = 0;
+
+				if ((kboard[arp[0]] >> arp[1]) & 1) {
+					playNote((arp[0]*NKEYS)+arp[1], HIGH, channel);
+					if (overwrite && current[channel-1] != NULL) {
+						for (int i=0; i<NOCTAVES; i++) current[channel-1]->kboard_s[i] = 0;
+						current[channel-1]->kboard_s[arp[0]] = current[channel-1]->kboard_s[arp[0]] | (1 << arp[1]);
+					}
+					break;
+				}
+			}
+		}
+
 		for (int chan = 0; chan < 6; chan++) {
 			if (mute[chan]) continue;
 			if (current[chan] != NULL) { // PLAY all step notes in all unmuted channels
@@ -210,6 +238,7 @@ void loop() {
 	
 	if (sem_gate > 0 && (millis() - last_gate) > gate_length) {
 		sem_gate--;
+		if (arpeggiating) playNote((arp[0]*NKEYS)+arp[1], LOW, channel);
 		for (int chan = 0; chan < 6; chan++) {
 			if (current[chan] == NULL) continue;
 			for (int i = 0; i < NOCTAVES; i++)
@@ -238,11 +267,12 @@ void loop() {
 		digitalWrite(OCTAVE[cOCTAVE], LOW);
 	}
 
-	if (current[channel-1] != NULL && digitalRead(OW)) {
-		if (npressed > 0) for (int i = 0; i < NOCTAVES; i++) {
-			difference = kboard[i] ^ current[channel-1]->kboard_s[i];
-			if (difference != 0) current[channel-1]->kboard_s[i] = kboard[i];
-		}
+	if (current[channel-1] != NULL && overwrite) {
+		if (!arpeggiating && npressed > 0)
+			for (int i = 0; i < NOCTAVES; i++) {
+				difference = kboard[i] ^ current[channel-1]->kboard_s[i];
+				if (difference != 0) current[channel-1]->kboard_s[i] = kboard[i];
+			}
 		if (dpadhit) current[channel-1]->dpad_s = current[channel-1]->dpad_s | dpad; // Drum hits aren't exclusive!
 	}
 }
@@ -272,7 +302,7 @@ int eval(int input, int nOct) {
 	difference = kboard[nOct] ^ input;
 
 	for (int c = 0; c < 12; c++) {
-		if ((difference>>c) & 1) playNote(c + sNOTE, ((input>>c) & 1), channel);
+		if (!arpeggiating && ((difference>>c) & 1)) playNote(c + sNOTE, ((input>>c) & 1), channel);
 		if (((input>>c) & 1)) pressed++;
 	}
 	if (difference != 0) kboard[nOct] = input;
