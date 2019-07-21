@@ -107,8 +107,9 @@ void setup() {
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
 	pinMode(NEXT, INPUT_PULLUP);
 	display(loadingDisplay[1]);
-	MIDI.begin(MIDI_CHANNEL_OFF);
-	Serial.begin(115200); 								// Uncomment this if you use Hairless and set baud rate
+	MIDI.begin(1); // was using MIDI_CHANNEL_OFF
+	MIDI.setHandleClock(clocksync);
+	MIDI.setHandleControlChange(midisettings);
 	display(loadingDisplay[2]);
 	for (int i = 0; i < 6; i++){
 		current[i] = NULL;
@@ -133,10 +134,17 @@ void setup() {
 }
 
 void loop() {
-	sync();
 	cap_read = cap.touched();
+	MIDI.read();
 
-	if ((cap_read >> 8) & 1) {				// Only for now!
+	if (next_step != (bool) !digitalRead(NEXT)) { 		// Manual step control
+		next_step = (bool) !digitalRead(NEXT);
+		if (millis() > last_next+DEBOUNCE && next_step == HIGH) {
+			last_next = millis();
+			sem_beat++;
+		}
+	}
+	if ((cap_read >> 8) & 1) {				// Only for now! Needed to change channel
 		for (int i=0; i<NBITS; i++) digitalWrite(LEDS[i], LOW);
 		digitalWrite(LEDS[channel-1], HIGH);
 	} 
@@ -275,6 +283,11 @@ void loop() {
 			}
 		if (dpadhit) current[channel-1]->dpad_s = current[channel-1]->dpad_s | dpad; // Drum hits aren't exclusive!
 	}
+
+	if (millis() > last_save + (unsigned long) MINUTE*INTERVAL) {
+		saveAll();
+		last_save = millis();
+	}
 }
 
 // Hardware specific functions
@@ -330,32 +343,18 @@ void playDrum(int c, bool status, byte chan) {
 	}
 }
 
-// Sync functions
+// MIDI callback functions
 
-void sync() {
+void clocksync(){
+	midiclock++;
+	if (midiclock == BPQN) {
+		midiclock = 0;
+		sem_beat++;
+	}
+}
 
-	if (millis() > last_save + (unsigned long) MINUTE*INTERVAL) {
-		saveAll();
-		last_save = millis();
-	}
-
-	if (next_step != (bool) !digitalRead(NEXT)) { // Used to increase channel with a button because I don't have a rotary switch (yet!)
-		next_step = (bool) !digitalRead(NEXT);
-		if (millis() > last_next+DEBOUNCE && next_step == HIGH) {
-			last_next = millis();
-			sem_beat++;
-		}
-	}
-	if (Serial.available()) {
-		if (Serial.read() == MIDICLOCK) {
-			//sem_beat++;
-			midiclock++;
-			if (midiclock == BPQN) {
-				midiclock = 0;
-				sem_beat++;
-			}
-		}
-	}
+void midisettings(byte channel, byte number, byte value) {
+	return;
 }
 
 // List management functions
