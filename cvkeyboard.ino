@@ -101,7 +101,7 @@ Adafruit_MPR121 cap = Adafruit_MPR121();
 
 void setup() {
 	display(loadingDisplay[0]);
-	for (int cOCTAVE = 0; cOCTAVE < NOCTAVES; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], OUTPUT);
+	for (int cOCTAVE = 0; cOCTAVE < NOCTAVES; cOCTAVE++) pinMode(OCTAVE[cOCTAVE], INPUT); // These have to be inputs, otherwise they'll sink current and mess with notes above octaves
 	for (int cNOTE = 0; cNOTE < NKEYS; cNOTE++) pinMode(NOTE[cNOTE], INPUT);
 	for (int cLED = 0; cLED < NBITS; cLED++) pinMode(LEDS[cLED], OUTPUT);
 	pinMode(OW, INPUT_PULLUP);                           // Used for overwrite switch
@@ -270,9 +270,11 @@ void loop() {
 
 	npressed = 0;
 	for (int cOCTAVE = 0; cOCTAVE < 4; cOCTAVE++) {
+		pinMode(OCTAVE[cOCTAVE], OUTPUT);
 		digitalWrite(OCTAVE[cOCTAVE], HIGH);
 		npressed += eval(scan(), cOCTAVE);
 		digitalWrite(OCTAVE[cOCTAVE], LOW);
+		pinMode(OCTAVE[cOCTAVE], INPUT);
 	}
 
 	if (current[channel-1] != NULL && overwrite) {
@@ -354,7 +356,7 @@ void clocksync(){
 }
 
 void midisettings(byte channel, byte number, byte value) {
-	return;
+	if (number == 3) gate_length = (value*10)+10;
 }
 
 // List management functions
